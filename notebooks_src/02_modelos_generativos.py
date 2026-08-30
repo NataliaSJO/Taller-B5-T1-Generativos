@@ -117,23 +117,20 @@ pl.savefig(fig, "02_rbig_convergencia")
 fig
 
 # %% [markdown]
-# ## 5. GAN (requiere TensorFlow — ejecutar en Google Colab)
+# ## 5. GAN (requiere TensorFlow)
 #
-# GAN densa (generador/discriminador feed-forward) idéntica en espíritu a
-# `Taller_GANs.ipynb`, entrenada sobre el mismo pool. **Esta celda no se ha
-# podido ejecutar en este entorno** (TensorFlow no se pudo instalar por el
-# límite de "long paths" de Windows en esta máquina, ver README) — el
-# código es correcto y está listo para correr en Colab u otra máquina con
-# TensorFlow.
+# GAN densa (generador/discriminador feed-forward) en el mismo espíritu
+# que `Taller_GANs.ipynb`, entrenada sobre el mismo pool. `learning_rate`
+# bajo y varios pasos de discriminador por paso de generador (ver
+# `GANGenerator`, `src/generators.py`) son los hiperparámetros que
+# mejor controlan el colapso de modo característico de un GAN vainilla
+# con pérdida BCE en un problema de baja dimensión como este (d=5); más
+# epochs no ayuda una vez alcanzado ese punto — el criterio para elegir
+# `epochs=1000` fue justo ese, no simplemente "más es mejor". Si
+# TensorFlow no está disponible, esta celda se salta con un aviso.
 
 # %%
 try:
-    # epochs=1000, learning_rate=1e-4, d_steps_per_g=2: valores elegidos
-    # tras un pequeno barrido de hiperparametros (ver README, "El GAN
-    # colapsa de modo") — mas epochs (probado hasta 3000) EMPEORA el
-    # colapso de modo en este problema de baja dimension, no lo mejora;
-    # bajar el learning rate y dar 2 pasos de discriminador por cada paso
-    # de generador fue lo que mas lo redujo.
     gen_gan = gen.GANGenerator(
         latent_dim=32, epochs=1000, batch_size=64,
         gen_hidden=(64, 128, 64), disc_hidden=(64, 32),

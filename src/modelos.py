@@ -192,14 +192,12 @@ def build_gan_discriminator(input_dim: int, hidden_units=(128, 64)):
 
 
 def build_gan_combined(generator, discriminator):
-    """Modelo combinado generador+discriminador congelado, tal cual
-    `Taller_GANs.ipynb`. `src.generators.GANGenerator` YA NO usa esta
-    funcion para entrenar (ver la nota "Keras 3" en su docstring: el truco
-    de congelar `discriminator.trainable=False` y confiar en que el
-    compilado anterior "recuerde" las variables entrenables no funciona en
-    Keras 3 sin recompilar en cada paso, ~20x mas lento) — se deja aqui por
-    fidelidad al notebook de clase y por si se quiere inspeccionar/depurar
-    el modelo combinado manualmente."""
+    """Modelo combinado generador+discriminador congelado (congela
+    `discriminator.trainable` antes de compilarlo junto al generador).
+    `src.generators.GANGenerator` entrena con pasos manuales de
+    `tf.GradientTape` en vez de este modelo combinado (ver su docstring);
+    esta funcion se deja disponible para inspeccionar o depurar el grafo
+    combinado manualmente si hace falta."""
     discriminator.trainable = False
     model = keras.Sequential(name="gan_combined")
     model.add(generator)

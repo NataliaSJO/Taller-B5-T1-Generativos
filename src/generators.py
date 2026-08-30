@@ -215,32 +215,24 @@ class RBIGGenerator(BaseGenerator):
 # 4) GAN densa (arquitectura en src/modelos.py)
 # ---------------------------------------------------------------------------
 class GANGenerator(BaseGenerator):
-    """GAN totalmente conectada sobre el vector aplanado, replicando
-    Taller_GANs.ipynb (generador/discriminador densos, entrenamiento
-    adversarial por batches con ratio adaptativo D/G). La arquitectura de
-    las redes vive en `src.modelos.build_gan_generator/build_gan_discriminator`;
-    esta clase solo orquesta fit/sample y guarda el historial de losses.
+    """GAN totalmente conectada sobre el vector aplanado, en el mismo
+    espiritu que Taller_GANs.ipynb (generador/discriminador densos,
+    entrenamiento adversarial por batches con ratio adaptativo D/G). La
+    arquitectura de las redes vive en
+    `src.modelos.build_gan_generator/build_gan_discriminator`; esta clase
+    orquesta el entrenamiento y guarda el historial de losses.
 
-    *** Nota Keras 3 *** `Taller_GANs.ipynb` entrena con el truco clasico
-    de Keras 1/2: congelar el discriminador (`discriminator.trainable =
-    False`) y compilar un modelo combinado generador+discriminador aparte
-    (`modelos.build_gan_combined`), confiando en que el discriminador ya
-    compilado (con `trainable=True`) "recuerda" sus variables entrenables
-    aunque luego se ponga `trainable=False`. Ese truco depende de que Keras
-    fije la lista de variables entrenables EN EL MOMENTO DE COMPILAR y no
-    la actualice despues — comprobado empiricamente en este proyecto
-    (Keras 3.15 / TF 2.21): ya NO es asi, `trainable_variables` se evalua
-    de forma dinamica, así que sin recompilar en cada paso (~20x mas lento)
-    el discriminador deja de aprender del todo.
-
-    Por eso aqui NO se usa `build_gan_combined` ni `train_on_batch`: se
-    entrena con pasos manuales de `tf.GradientTape`, pidiendo gradientes
-    SOLO de `disc_.trainable_variables` (paso D) o SOLO de
+    El entrenamiento usa pasos manuales de `tf.GradientTape` en vez del
+    truco de congelar el discriminador (`discriminator.trainable = False`
+    + modelo combinado) de Keras 1/2: ese truco depende de que Keras fije
+    la lista de variables entrenables al compilar y no la actualice
+    despues, algo que Keras 3 ya no garantiza (`trainable_variables` se
+    evalua de forma dinamica). Con `GradientTape` se piden gradientes SOLO
+    de `disc_.trainable_variables` (paso D) o SOLO de
     `gen_.trainable_variables` (paso G, con `disc_(..., training=False)`
-    dentro de la cinta pero sin pedirle gradientes) — mismo resultado
-    conceptual que el truco de clase (GAN adversarial por lotes con ratio
-    D/G adaptativo), pero sin depender de la gestion interna de
-    `.trainable` de cada version de Keras."""
+    dentro de la cinta pero sin pedirle gradientes) — el mismo
+    entrenamiento adversarial con ratio D/G adaptativo, sin depender de
+    como cada version de Keras gestione `.trainable` internamente."""
 
     name = "gan"
 
@@ -272,34 +264,21 @@ class GANGenerator(BaseGenerator):
         d = XY_flat.shape[1]
         XY_flat = XY_flat.astype("float32")
 
-        # El generador termina en activation='tanh' (fiel a Taller_GANs.ipynb),
-        # que solo tiene rango util en [-1, 1] y satura fuera. Nuestras
-        # columnas (retorno diario, volatilidad realizada, ...) valen
-        # tipicamente 0.01-0.03 en magnitud -> siempre caen en la zona
-        # practicamente lineal de tanh (tanh(x)=x para x pequeno), pero la
-        # cola (hasta los limites de sensatez de config.POOL_MAX_*, hasta
-        # 1.0 en hl_range) se comprimiria de forma notable sin reescalar.
-        # Se reescala cada columna por su percentil 99.5 de |valor| ANTES
-        # de entrenar (asi el generador usa el rango completo de tanh, no
-        # solo una rebanada minuscula cerca de 0) y se deshace al muestrear
-        # — practica estandar en GANs, no cambia el modelo, solo la escala
-        # en la que opera.
+        # El generador termina en activation='tanh', con rango util en
+        # [-1, 1]. Nuestras columnas (retorno diario, volatilidad
+        # realizada, ...) valen tipicamente 0.01-0.03 en magnitud: sin
+        # reescalar, el generador solo usaria una rebanada minuscula del
+        # rango de tanh cerca de 0. Se reescala cada columna por su
+        # percentil 99.5 de |valor| antes de entrenar (asi se aprovecha el
+        # rango completo de tanh) y se deshace al muestrear — practica
+        # estandar en GANs, no cambia el modelo, solo la escala en la que
+        # opera.
         self.scale_ = np.maximum(np.percentile(np.abs(XY_flat), 99.5, axis=0), 1e-6).astype("float32")
         XY_scaled = XY_flat / self.scale_
 
         self.gen_ = modelos.build_gan_generator(self.latent_dim, d, self.gen_hidden)
         self.disc_ = modelos.build_gan_discriminator(d, self.disc_hidden)
 
-        # learning_rate=1e-4 (Adam por defecto usa 1e-3): en el barrido de
-        # hiperparametros de este proyecto, bajar el learning rate fue lo
-        # que mas mejoro el colapso de modo del GAN vainilla en este
-        # problema de baja dimension (d=5) — de una distancia de Frobenius
-        # real-vs-sintetico de ~3.0 (colapso severo, ver notebook 02) a
-        # ~1.3 con la misma arquitectura y el resto de hiperparametros
-        # igual. Sigue sin iguialar a RBIG/Gaussiana/Ruido en ese
-        # diagnostico: es una limitacion conocida y documentada de los GAN
-        # vainilla en problemas de pocas dimensiones (ver README, seccion
-        # de limitaciones), no un fallo de implementacion.
         bce = tf.keras.losses.BinaryCrossentropy()
         opt_d = tf.keras.optimizers.Adam(self.learning_rate)
         opt_g = tf.keras.optimizers.Adam(self.learning_rate)
@@ -328,9 +307,9 @@ class GANGenerator(BaseGenerator):
 
         for epoch in range(self.epochs):
             # d_steps_per_g pasos de discriminador por cada paso de
-            # generador: en el barrido de hiperparametros, dar al
-            # discriminador mas pasos (>1) ademas del learning rate bajo
-            # redujo aun mas el colapso de modo (ver notebook 02 / README).
+            # generador: darle al discriminador varios pasos por cada
+            # actualizacion del generador ayuda a que la señal de
+            # gradiente que recibe el generador sea mas informativa.
             for _ in range(self.d_steps_per_g):
                 batch_discr = max(1, int(round(ratio * batch)))
                 idx = np.random.randint(0, len(XY_scaled) - batch_discr) if len(XY_scaled) > batch_discr else 0

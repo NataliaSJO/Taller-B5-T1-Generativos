@@ -1,10 +1,8 @@
 # %% [markdown]
 # # 04 · Entrenamiento del predictor del día siguiente
 #
-# **Requiere TensorFlow** (Google Colab, o local si se resuelve el límite
-# de "long paths" de Windows — ver README). Este notebook no se ha podido
-# ejecutar en el entorno de desarrollo de este proyecto; el código está
-# completo y lee directamente de los `.npz` que deja el notebook 03.
+# **Requiere TensorFlow** (Google Colab, o un entorno local con
+# `requirements.txt` instalado — ver README, sección "Entorno").
 #
 # Dos pasos, seleccionando siempre la arquitectura por el ERROR EN
 # VALIDACIÓN (nunca en test):
@@ -30,23 +28,25 @@
 # volatilidad SINTÉTICA se añade — el final del entrenamiento
 # (`VAL_START_DATE`) es siempre el mismo, no cambia con la profundidad.
 #
-# **Sobre la métrica — MAE como loss, no solo como número final**: los
-# notebooks de clase compilan con `loss='mse'` y solo reportan MAE después
-# de entrenar. Pero la propia diapositiva de teoría del taller ("REAL
-# PROBLEM", `2026_Taller_Generativos.pdf` pág. 11-12) dice explícitamente
-# **"Learning: minimize MAE"** para el problema real que motiva todo el
-# taller — y sus resultados (pág. 27-28) se reportan en las unidades del
-# target (Kelvin), la ventaja práctica de MAE frente a MSE (que está en
-# unidades al cuadrado, no interpretables directamente). Nuestro target
-# (retorno diario) es igual de heavy-tailed que un problema físico con
-# outliers — lo vimos nosotros mismos en el notebook 02 (la Gaussiana no
-# reproduce el pico leptocúrtico de los datos reales) — así que entrenar
+# **Sobre la métrica — MAE como *loss*, no solo como número final**: la
+# diapositiva de teoría del taller ("REAL PROBLEM",
+# `2026_Taller_Generativos.pdf` pág. 11-12) especifica **"Learning:
+# minimize MAE"** para el problema real que motiva el taller, y reporta el
+# error en las unidades del target (Kelvin) — la ventaja de MAE frente a
+# MSE, que queda en unidades al cuadrado. El retorno diario es igual de
+# heavy-tailed que ese problema (ver notebook 02: la Gaussiana no
+# reproduce el pico leptocúrtico de los datos reales), así que entrenar
 # con MSE dejaría que los pocos días de retorno extremo dominen el
 # gradiente. Por eso aquí se entrena con `loss='mae'` (parámetro de
-# `src/modelos.py`, no hay que tocar el fichero — ver `LOSS_FUNCTION` más
-# abajo), más fiel al principio de la teoría del taller que a la
-# implementación literal del notebook de juguete. Se siguen reportando
-# MAE, MSE y precisión direccional para cada modelo.
+# `build_predictor_*`, ver `LOSS_FUNCTION` más abajo). Se reportan MAE,
+# MSE y precisión direccional para cada modelo.
+#
+# **Sobre la convergencia**: `EarlyStopping` con `patience` alto (no unas
+# pocas epochs) — el criterio de parada exige que `val_loss` lleve
+# `EARLY_STOPPING_PATIENCE` epochs SEGUIDAS sin mejorar, así que cuando un
+# entrenamiento para, la curva de loss ya lleva un tramo largo y plano:
+# es la evidencia visual de convergencia que pide el enunciado, no solo
+# "dejó de mejorar hace poco".
 
 # %%
 import sys
@@ -61,19 +61,15 @@ import matplotlib.pyplot as plt
 
 from src import config, modelos, plotting as pl, train_utils as tu
 
-# EPOCHS_* son ahora un TECHO, no el nº de epochs que realmente se entrena:
-# tanto run_architecture_comparison como run_depth_grid paran antes via
-# EarlyStopping (patience=15 sobre val_loss, se queda con los mejores
-# pesos vistos) — entrenar dataset de 250 filas y de 7300 filas el mismo
-# nº fijo de epochs no tiene sentido (el pequeno sobreajusta mucho antes;
-# el grande ni converge), y desperdicia tiempo en los que ya convergieron.
-# Poner EARLY_STOPPING_PATIENCE=None reproduce el comportamiento literal
-# de los notebooks de clase (epochs fijas, sin parada temprana).
-EPOCHS_ARQUITECTURA = 200
-EPOCHS_REJILLA = 300
+# EPOCHS_* son un techo de seguridad, no el nº de epochs que se entrena
+# realmente: tanto run_architecture_comparison como run_depth_grid paran
+# antes vía EarlyStopping (ver arriba). El techo se deja holgado para que
+# sea EarlyStopping, no el techo, quien decida cuándo parar.
+EPOCHS_ARQUITECTURA = 300
+EPOCHS_REJILLA = 500
 BATCH_SIZE = 64
-EARLY_STOPPING_PATIENCE = 15
-LOSS_FUNCTION = "mae"  # ver justificacion arriba; cambiar a "mse" reproduce el notebook de clase literal
+EARLY_STOPPING_PATIENCE = 100
+LOSS_FUNCTION = "mae"
 
 # %% [markdown]
 # ## 1. Cargar los 4 datasets de 30 años (notebook 03)
@@ -160,10 +156,7 @@ fig
 # %% [markdown]
 # Se elige la arquitectura con menor MAE en **validación** (no en test:
 # el test se reserva íntegro para la comparación de generadores del
-# siguiente paso). `cnn_3bloques` reproduce `cnn_model_2` de
-# `Taller_GANs.ipynb`, la arquitectura con la que la propia clase compara
-# GAN/RBIG — es la elección por defecto salvo que la validación diga
-# claramente lo contrario.
+# siguiente paso).
 
 # %%
 ARQUITECTURA_GANADORA = arch_results["mae"].idxmin()
@@ -174,8 +167,7 @@ if mejor_direccional != ARQUITECTURA_GANADORA:
         f"[AVISO] '{mejor_direccional}' tiene mejor precisión direccional "
         f"({arch_results.loc[mejor_direccional, 'directional_accuracy']:.3f} vs "
         f"{arch_results.loc[ARQUITECTURA_GANADORA, 'directional_accuracy']:.3f}) aunque peor MAE — "
-        "el criterio de selección (MAE, ver justificación de la métrica arriba) no siempre "
-        "coincide con el de mejor acierto de signo. Merece la pena citar ambos en la presentación."
+        "vale la pena citar ambas arquitecturas en la presentación."
     )
 
 

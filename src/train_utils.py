@@ -116,10 +116,11 @@ def slice_by_depth(
 
 def _make_early_stopping(patience: int | None):
     """Callback de EarlyStopping (monitoriza val_loss, restaura los mejores
-    pesos) — entrenar 150 epochs fijas cuando el modelo converge en 30 no
-    solo desperdicia tiempo, tambien puede empeorar test por sobreajuste.
-    `patience=None` desactiva el early stopping (epochs fijas, como en los
-    notebooks de clase)."""
+    pesos). `patience` alto a proposito: hace falta ver el val_loss
+    estable durante muchas epocas seguidas (no solo dejar de mejorar un
+    par de epocas) para poder afirmar que el modelo ha convergido — que
+    es justo lo que tienen que mostrar las curvas de loss. `patience=None`
+    desactiva el early stopping (epochs fijas)."""
     if patience is None:
         return []
     from tensorflow import keras
@@ -142,7 +143,7 @@ def run_architecture_comparison(
     epochs: int = 50,
     batch_size: int = 32,
     verbose: int = 0,
-    early_stopping_patience: int | None = 15,
+    early_stopping_patience: int | None = 100,
 ) -> tuple[pd.DataFrame, dict]:
     """Entrena cada arquitectura de `architectures` (dict nombre -> funcion
     factoria SIN argumentos que devuelve un modelo listo para `.fit`) sobre
@@ -197,7 +198,7 @@ def run_depth_grid(
     batch_size: int = 32,
     verbose: int = 0,
     ticker_names: list[str] | None = None,
-    early_stopping_patience: int | None = 15,
+    early_stopping_patience: int | None = 100,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """Para cada generador de `datasets_by_generator` (nombre -> (X, Y, idx,
     is_synthetic) con el historico COMPLETO de 30 anios construido con el

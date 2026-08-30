@@ -8,11 +8,11 @@ los que solo tenemos precio de cierre diario (Norgate).**
 
 **Resultado (§6, con los 6 notebooks ejecutados end-to-end sobre datos
 reales): sí ayuda.** 3 de los 4 generadores igualan o mejoran al modelo
-entrenado solo con la ventana real; el mejor (Ruido, +28 años de
-backfill) sube la precisión direccional del predictor de 51.4% a 53.0% y
-baja el MAE un 0.33%. El cuarto (RBIG) empeora de forma clara y
-explicable — la comparación entre generadores es en sí uno de los
-hallazgos del proyecto, no solo un detalle técnico.
+entrenado solo con la ventana real; el mejor (Ruido, +28 años de backfill)
+sube la precisión direccional del predictor de 51.4% a 53.0% y baja el MAE
+un 0.33%. El cuarto (RBIG) empeora de forma clara y explicable — la
+comparación entre los 4 tipos de generador es en sí uno de los hallazgos
+del proyecto, no solo un detalle técnico.
 
 ## 1. El problema financiero
 
@@ -40,14 +40,14 @@ La respuesta se construye con datos reales de principio a fin:
 ## 2. Los 4 modelos generativos (y por qué estos)
 
 El enunciado pide 3 tipos de modelo generativo distintos "de los vistos en
-clase" + 1 modelo simple. `Material_clase/` solo trae notebook completo de
-2 técnicas (GAN, Gaussiana), pero la propia teoría del taller
+clase" + 1 modelo simple. `Material_clase/` trae notebook completo de 2
+técnicas (GAN, Gaussiana), y la propia teoría del taller
 (`2026_Taller_Generativos.pdf`, diapositivas "GANs vs RBIG") compara esas
-GAN precisamente contra **RBIG** — el método del propio profesor del
-taller (Valero Laparra) — como tercera alternativa, con resultados
-cuantitativos incluidos en la diapositiva. Y el modelo simple obligatorio
-("que coja datos originales y les añada ruido") es literalmente una celda
-de `Taller_GANs.ipynb` ("Ejemplo muy tonto (datos con ruido)").
+GAN contra **RBIG** — el método del propio profesor del taller (Valero
+Laparra) — como tercera alternativa, con resultados cuantitativos incluidos
+en la diapositiva. El modelo simple obligatorio ("que coja datos originales
+y les añada ruido") es literalmente una celda de `Taller_GANs.ipynb`
+("Ejemplo muy tonto (datos con ruido)").
 
 | Generador | Origen | Idea |
 |---|---|---|
@@ -56,21 +56,19 @@ de `Taller_GANs.ipynb` ("Ejemplo muy tonto (datos con ruido)").
 | **RBIG** (Rotation-Based Iterative Gaussianization) | Teoría del taller, comparado con GAN en las diapositivas | Alterna gaussianización marginal (vía función de distribución empírica) + rotación ortogonal aleatoria, hasta que los datos son ≈ N(0,I). Implementado desde cero en `src/generators.py` (no hay paquete `rbig` en PyPI). |
 | **GAN** | `Taller_GANs.ipynb` | Generador/discriminador densos, entrenamiento adversarial por lotes con *ratio* adaptativo D/G — arquitectura idéntica en espíritu a la de clase. |
 
-**Diferencia importante con el recipe de clase** (y con lo que pedía la
-primera versión de este proyecto): en clase, el GAN/Gaussiana generan
+**Diferencia con el recipe de clase**: en clase, el GAN/Gaussiana generan
 directamente ventanas `(X, Y)` de retornos y se comparan añadiendo distintas
 cantidades de muestras sintéticas *completas* a un `train_test_split`
-aleatorio. **Aquí no** — replicar eso tal cual sobre nuestros datos no
-añade nada que el ejercicio de clase no mostrara ya. En su lugar, los 4
-generadores aprenden la distribución conjunta real
-`[retorno_diario, volatilidad_realizada, retorno_apertura_30m,
+aleatorio. Aquí, en cambio, los 4 generadores aprenden la distribución
+conjunta real `[retorno_diario, volatilidad_realizada, retorno_apertura_30m,
 retorno_cierre_30m, rango_intradía]` sobre la ventana real de 2 años (todos
 son generadores **incondicionales** — no cambia el mecanismo de
 entrenamiento entre ellos), y **el retorno diario ya conocido de cada día
 histórico (real, de Norgate) se usa para condicionar por *conditional
 matching*** qué muestra sintética de features intradía le corresponde (ver
-§4). Es una extensión genuina del material de clase a un problema nuevo,
-no una copia.
+§4). Es una extensión del material de clase a un problema nuevo, no una
+copia del ejercicio: replicar el recipe de clase tal cual sobre estos datos
+no aportaría nada que el ejercicio original no mostrara ya.
 
 ## 3. Los dos universos de bancos
 
@@ -104,10 +102,10 @@ no una copia.
         |                    diario REAL (conditional matching); construye
         |                    4 datasets de 30 años (ventanas X/Y)
         v
-04_entrenamiento_predictor  (a) elige arquitectura con SOLO los 2 años
-        |                    reales; (b) entrena esa arquitectura en la
-        |                    rejilla profundidad_histórica × generador,
-        |                    evaluando siempre en el mismo test real
+04_entrenamiento_predictor  (a) elige arquitectura con SOLO la ventana
+        |                    real disponible; (b) entrena esa arquitectura
+        |                    en la rejilla profundidad histórica ×
+        |                    generador, evaluando siempre en el mismo test
         v
 05_analisis_resultados      Tablas/gráficas finales: ¿mejora con más
                              sintéticos?, ¿qué generador gana?, ¿se
@@ -144,40 +142,48 @@ estadísticos) — ni validación ni test se contaminan.
 
 ### Sobre la métrica: MAE como *loss*, no solo como número final
 
-Los notebooks de clase compilan siempre con `loss='mse'` y reportan MAE
-después de entrenar, como metrica secundaria. Pero la propia diapositiva de
-teoría del taller (`2026_Taller_Generativos.pdf`, "REAL PROBLEM", pág.
-11-12 — el caso LST/IASI que motiva todo el ejercicio) dice explícitamente:
+Los notebooks de clase compilan con `loss='mse'` y reportan MAE después de
+entrenar, como métrica secundaria. La diapositiva de teoría del taller
+(`2026_Taller_Generativos.pdf`, "REAL PROBLEM", pág. 11-12 — el caso
+LST/IASI que motiva todo el ejercicio) dice, en cambio:
 
 > **Learning: minimize MAE**, `min_θ D(ŷ, y)`
 
 y sus resultados (pág. 27-28, "Errors: Only real data = 4.81K...") se
 reportan en la unidad NATURAL del target (Kelvin) — la ventaja práctica de
 entrenar con MAE en vez de MSE, que queda en unidades al cuadrado y no es
-directamente interpretable. Es decir: **la propia teoría del taller
-recomienda MAE como función de aprendizaje para el problema real; el
-notebook de alumno solo la usa como métrica de reporte.**
+directamente interpretable. La propia teoría del taller recomienda MAE
+como función de aprendizaje para el problema real que lo motiva.
 
 Para nuestro problema esto no es un detalle menor: un retorno diario es
-heavy-tailed — lo demostramos nosotros mismos en el notebook 02 (la
-Gaussiana no reproduce el pico leptocúrtico de la distribución real).
-Entrenar con MSE deja que los pocos días de retorno extremo dominen el
-gradiente; MAE trata cada día por igual, más robusto y más fiel al
-principio de la teoría del taller que a la implementación literal del
-notebook de juguete. Por eso el notebook 04 entrena con `loss='mae'`
-(parámetro `LOSS_FUNCTION`, configurable — nunca hardcodeado en
+heavy-tailed (notebook 02: la Gaussiana no reproduce el pico leptocúrtico
+de la distribución real). Entrenar con MSE dejaría que los pocos días de
+retorno extremo dominen el gradiente; MAE trata cada día por igual. Por eso
+el notebook 04 entrena con `loss='mae'` (parámetro `LOSS_FUNCTION` en el
+notebook, `loss` en `build_predictor_*` — nunca hardcodeado en
 `src/modelos.py`, ver la nota "no modificar hiperparámetros aquí" del
 propio fichero).
 
-También se corrige otro detalle: una MAE **pooleada** sobre los 25 bancos a
-la vez queda dominada por los de mayor volatilidad (GBCI es ~1.6x más
-volátil que JPM, notebook 01) — la comparación final de
-`Taller_con_Datos_SP500_promedio.ipynb` es precisamente un desglose **por
-banco** ("per-ticker MAE"), que es lo que reproduce el notebook 04
-(`04_mae_por_banco.csv`/`.png`). Y se añade **precisión direccional**
-(`% de días con el signo del retorno acertado`, 0.5 = azar) como métrica
-adicional específica de finanzas: el MAE mide error de magnitud, pero para
-un "predictor de precios" también importa si acierta la dirección.
+Además, una MAE **pooleada** sobre los 25 bancos a la vez queda dominada
+por los de mayor volatilidad (GBCI es ~1.6x más volátil que JPM, notebook
+01) — la comparación final de `Taller_con_Datos_SP500_promedio.ipynb` es
+precisamente un desglose **por banco** ("per-ticker MAE"), que es lo que
+reproduce el notebook 04 (`04_mae_por_banco.csv`/`.png`). Se añade también
+**precisión direccional** (`% de días con el signo del retorno acertado`,
+0.5 = azar) como métrica adicional específica de finanzas: el MAE mide
+error de magnitud, pero para un "predictor de precios" también importa si
+acierta la dirección.
+
+### Sobre la convergencia: `EarlyStopping` con paciencia alta
+
+El notebook 04 entrena cada modelo con `EarlyStopping` (monitoriza
+`val_loss`, se queda con los mejores pesos vistos) en vez de un número fijo
+de epochs — pero con `patience=100`: hace falta que `val_loss` lleve 100
+epochs SEGUIDAS sin mejorar antes de parar. Eso asegura que la curva de
+loss llega con un tramo largo y plano, la evidencia visual de convergencia
+que pide el enunciado, y no solo "dejó de mejorar hace poco". Los techos de
+epochs (`EPOCHS_ARQUITECTURA`, `EPOCHS_REJILLA`) se dejan holgados para que
+sea `EarlyStopping`, no el techo, quien decida cuándo parar.
 
 ## 5. Lógica financiera: por qué el diseño aguanta
 
@@ -189,49 +195,45 @@ explícito, causal, día a día.
 `X` es la ventana de 60 días `[t-61, ..., t-1]` (retorno + volatilidad
 realizada, ambos ya CERRADOS y conocidos al final de `t-1`); `Y` es el
 retorno de `t` (el día siguiente, aún no observado). El modelo nunca ve
-nada de `t` para construir `X`. Esto es simplemente correcto por
-construcción (`features.build_xy_windows`), pero merece decirse explícito
-porque es la base de todo lo demás.
+nada de `t` para construir `X` (`features.build_xy_windows`).
 
 **2. El backfill sintético tampoco tiene fuga hacia el target — y NO es un
 `.bfill()` de pandas.** "Backfill" aquí es "rellenar historia pasada", no
-el método de pandas que propaga hacia atrás el *siguiente* valor
-conocido (que sí sería sospechoso: usaría, p.ej., un dato de 2025 para
-describir 1998). Lo que hace `src/backfill.py::conditional_match_sample`
-para un día histórico `t-1` sin barras de 5 min reales es: tomar el
-**retorno REAL ya conocido de ESE MISMO día `t-1`** (Norgate, contemporáneo,
-no del futuro) y usarlo para consultar, en el pool de pares
-`(retorno, volatilidad)` aprendido en la ventana real de 2024-2025, qué
-volatilidad es plausible para un retorno de esa magnitud. Ningún dato de
-2024-2025 se copia literalmente a 1998; solo se usa la RELACIÓN aprendida
-ahí, aplicada al retorno propio de 1998. Ni el target (el retorno de `t`)
-ni ningún dato posterior a `t-1` interviene en absoluto.
+el método de pandas que propaga hacia atrás el *siguiente* valor conocido
+(que sí sería sospechoso: usaría, p.ej., un dato de 2025 para describir
+1998). Lo que hace `src/backfill.py::conditional_match_sample` para un día
+histórico `t-1` sin barras de 5 min reales es: tomar el **retorno REAL ya
+conocido de ESE MISMO día `t-1`** (Norgate, contemporáneo, no del futuro) y
+usarlo para consultar, en el pool de pares `(retorno, volatilidad)`
+aprendido en la ventana real de 2024-2025, qué volatilidad es plausible
+para un retorno de esa magnitud. Ningún dato de 2024-2025 se copia
+literalmente a 1998; solo se usa la RELACIÓN aprendida ahí, aplicada al
+retorno propio de 1998. Ni el target (el retorno de `t`) ni ningún dato
+posterior a `t-1` interviene en absoluto.
 
 *¿Por qué no, entonces, un `.ffill()`/`.bfill()` literal (propagar el
-último o el próximo valor real conocido)?* Porque haría algo mucho peor
-que cualquier fuga: dejaría una volatilidad **constante durante 28 años**,
-ciega a la puntocom, 2008, el COVID o la crisis bancaria de 2023. Ya hay
-prueba de que esto importa: `03_backfill_serie_temporal_JPM.png` muestra
-que el *conditional matching* reproduce picos de volatilidad justo en esos
-años de crisis — porque usa el retorno real de cada día, que sí las
-capta. Un `.ffill()` destruiría esa señal.
+último o el próximo valor real conocido)?* Porque dejaría una volatilidad
+**constante durante 28 años**, ciega a la puntocom, 2008, el COVID o la
+crisis bancaria de 2023. `03_backfill_serie_temporal_JPM.png` muestra que
+el *conditional matching* reproduce picos de volatilidad justo en esos años
+de crisis — porque usa el retorno real de cada día, que sí las capta. Un
+`.ffill()` destruiría esa señal.
 
-**3. Ojo con lo que el backfill SÍ implica: la feature sintética es menos
+**3. Lo que el backfill SÍ implica: la feature sintética es menos
 informativa que la real, no solo "aproximada".** En los días reales, la
 volatilidad realizada se mide de forma independiente del retorno diario
 (vienen de fuentes distintas: barras intradía vs. cierre-a-cierre) y solo
 están correlacionadas (~0.45, notebook 01) — el residuo es información
 genuina. En los días sintéticos, la volatilidad se **deriva** del propio
-retorno de ese día (vía *conditional matching*) — así que, por
-construcción, lleva menos información marginal que no esté ya en el canal
-de retorno. Es una limitación real del método, no solo un matiz: significa
-que la ventaja esperable de la profundidad histórica sintética probablemente
-venga más de darle al modelo **más ejemplos de la relación retorno-pasado →
-retorno-futuro** (más contexto de mercado, más regímenes, más crisis vistas)
-que de aportar señal nueva vía la volatilidad intradía en sí en esos años.
-Es una historia honesta y sigue siendo interesante — pero no es "más
-sintéticos = más información intradía real", es "más sintéticos = más
-contexto histórico con una feature de volatilidad plausible pero derivada".
+retorno de ese día (vía *conditional matching*), así que, por construcción,
+lleva menos información marginal que no esté ya en el canal de retorno. Es
+una limitación real del método: la ventaja esperable de la profundidad
+histórica sintética probablemente venga más de darle al modelo **más
+ejemplos de la relación retorno-pasado → retorno-futuro** (más contexto de
+mercado, más regímenes, más crisis vistas) que de aportar señal nueva vía
+la volatilidad intradía en sí en esos años. Es "más sintéticos = más
+contexto histórico con una feature de volatilidad plausible pero derivada",
+no "más sintéticos = más información intradía real".
 
 **4. Separación temporal estricta, sin excepciones.** Los generadores
 (notebook 02) solo ven el pool real hasta `VAL_START_DATE`; ni validación
@@ -250,15 +252,14 @@ Republic, marzo 2023) no están. El predictor se evalúa solo sobre bancos
 que sobrevivieron 30+ años — un sesgo de supervivencia estándar y conocido
 en ML financiero, que probablemente hace que el problema sea algo más fácil
 (o al menos distinto) que predecir sobre el universo completo
-punto-en-el-tiempo. Se declara explícitamente en vez de ignorarlo.
+punto-en-el-tiempo.
 
 ## 6. Resultados
 
 Los 6 notebooks (`00` → `05`) están **ejecutados de principio a fin, en
 orden, contra datos 100% reales** (universo completo de 150 bancos para
 los generadores, 25 para el predictor). Todas las cifras de esta sección
-están citadas literalmente de `reports/tables/` y `reports/figures/` — no
-son ilustrativas.
+están citadas literalmente de `reports/tables/` y `reports/figures/`.
 
 ### 6.1 Los generadores (notebooks 00-03)
 
@@ -277,10 +278,9 @@ son ilustrativas.
   conjunta.
 - **`02_calidad_correlacion_generadores.csv`**: distancia de Frobenius
   entre la matriz de correlación real y la sintética (menor = mejor) —
-  **Ruido 0.39 < Gaussiana 0.40 < RBIG 0.48 < GAN 1.27**. El GAN mejoró
-  mucho tras el ajuste de hiperparámetros (ver §6.2) pero sigue siendo el
-  que peor reproduce la correlación conjunta — una limitación conocida de
-  los GAN vainilla en baja dimensión, no un fallo de la implementación
+  **Ruido 0.39 < Gaussiana 0.40 < RBIG 0.48 < GAN 1.27**. El GAN es el que
+  peor reproduce la correlación conjunta de los 4 — una limitación conocida
+  de los GAN vainilla en baja dimensión, no un fallo de la implementación
   (ver §9).
 - **`03_backfill_serie_temporal_JPM.png`**: la volatilidad sintética de
   JPM (28 años) muestra picos claros en 2001-02, 2008-09, 2020 y
@@ -291,34 +291,14 @@ son ilustrativas.
   sintética justo antes de 2024 es ~1.24-1.28× el nivel real justo
   después — sin salto artificial.
 
-### 6.2 El GAN sobre Keras 3: de roto a competitivo
-
-Este proyecto se desarrolló casi entero sin poder instalar TensorFlow
-localmente (ver §8); al conseguirlo, el GAN de `Taller_GANs.ipynb`
-resultó no funcionar en absoluto sobre Keras 3 (el truco clásico de
-congelar el discriminador no aplica ya — ver §9), y una vez arreglado
-(reescrito con `tf.GradientTape`, ver `src/generators.py::GANGenerator`)
-colapsaba de modo severamente. Un barrido de hiperparámetros dirigido
-llevó la distancia de Frobenius real-vs-sintético de **~3.0 (colapso
-severo) a ~1.27**, cambiando 3 cosas sin salir de la familia "GAN
-vainilla con pérdida BCE" de clase:
-
-| Cambio | Frobenius |
-|---|---|
-| Config. original (`Taller_GANs.ipynb`, lr=1e-3, 3000 epochs) | ~3.0 |
-| + `learning_rate=1e-4` | ~1.3 |
-| + 2 pasos de discriminador por paso de generador | ~1.25 |
-| + reescalar cada columna a `[-1,1]` antes de `tanh` (ver §9) | **~1.05 en el barrido, 1.27 en la ejecución final** |
-
-### 6.3 El predictor del día siguiente: ¿ayudan los sintéticos?
+### 6.2 El predictor del día siguiente: ¿ayudan los sintéticos?
 
 **Arquitectura ganadora** (`04_comparacion_arquitecturas.csv`, entrenada
-SOLO con la ventana real de ~1 año, con `EarlyStopping`): **`cnn_3bloques`**
-— exactamente `cnn_model_2` de `Taller_GANs.ipynb`, la arquitectura con la
-que la propia clase compara sus generadores. Gana en MAE (0.011789) **y**
-en precisión direccional (0.515, la mejor de las 7 arquitecturas
-comparadas) — sin la tensión entre ambas métricas que se veía en
-ejecuciones preliminares con menos epochs.
+SOLO con la ventana real de ~1 año, con `EarlyStopping` de convergencia
+estricta — ver §4): **`cnn_3bloques`** — exactamente `cnn_model_2` de
+`Taller_GANs.ipynb`, la arquitectura con la que la propia clase compara sus
+generadores. Gana en MAE (0.011789) **y** en precisión direccional (0.515,
+la mejor de las 7 arquitecturas comparadas).
 
 **Rejilla final** (`04_resultados_rejilla_profundidad.csv`,
 `05_tabla_generador_final.csv`), test MAE / precisión direccional con
@@ -332,21 +312,20 @@ ejecuciones preliminares con menos epochs.
 | Gaussiana | 0.011785 | +0.04% | 50.0% |
 | RBIG | 0.011959 | **−1.4%** (empeora) | 45.5% |
 
-**Lectura honesta**: 3 de los 4 generadores igualan o mejoran ligeramente
-al modelo entrenado solo con datos reales — con el Ruido (el modelo
-"simple" obligatorio del enunciado) ganando por MAE y precisión
-direccional a `+28` años, y el GAN igualándolo en el punto intermedio
-(`synth_years=14`, 52.9% de precisión direccional, la mejor de toda la
-rejilla). La mejora en MAE es modesta (~0.3%, esperable: predecir el
-signo/magnitud del retorno diario de un banco líquido es un problema
-cercano a la eficiencia de mercado, no hay milagros), pero la mejora en
+**Lectura**: 3 de los 4 generadores igualan o mejoran ligeramente al modelo
+entrenado solo con datos reales — el Ruido (el modelo "simple" obligatorio
+del enunciado) gana por MAE y precisión direccional a `+28` años, y el GAN
+lo iguala en el punto intermedio (`synth_years=14`, 52.9% de precisión
+direccional, la mejor de toda la rejilla). La mejora en MAE es modesta
+(~0.3%: predecir el signo/magnitud del retorno diario de un banco líquido
+es un problema cercano a la eficiencia de mercado), pero la mejora en
 **precisión direccional es consistente y más fácil de interpretar**: pasar
 de 51.4% (solo reales) a ~53% con el generador adecuado es una ventaja
 real, aunque pequeña, sobre lanzar una moneda.
 
 **RBIG es la excepción, y es una excepción explicable, no ruido.** Es el
 único generador cuyo rendimiento se **degrada por debajo del baseline**
-según se añade profundidad, y es también el que muestra la relación menos
+según se añade profundidad, y también el que muestra la relación menos
 favorable entre calidad de reconstrucción de la distribución conjunta
 (notebook 02) y rendimiento final (`05_calidad_generador_vs_mae.png`): a
 pesar de tener mejor distancia de Frobenius que el GAN, da peor MAE final
@@ -355,7 +334,7 @@ enunciado ("comparar entre los distintos tipos de modelos generativos
 usados") — la calidad del generador importa, y no toda métrica de
 fidelidad distribucional predice igual de bien la utilidad río abajo.
 
-### 6.4 Cómo reproducir estos números
+### 6.3 Cómo reproducir estos números
 
 Todo lo anterior sale de ejecutar, en orden, `00` → `05` con
 `jupyter nbconvert --to notebook --execute --inplace` (o abriendo cada
@@ -376,7 +355,7 @@ cambiar hiperparámetros.
 │   ├── raw/eodhd_5m/*.parquet cache de barras de 5 min (gitignored)
 │   └── interim/                datasets intermedios (gitignored)
 ├── notebooks_src/*.py         fuente "Jupytext" (celdas `# %%`) de cada notebook
-├── notebooks/*.ipynb          notebooks generados de notebooks_src/ (scripts/py_to_ipynb.py)
+├── notebooks/*.ipynb          notebooks ejecutados, con resultados (fuente en notebooks_src/)
 ├── src/
 │   ├── config.py               universos, fechas, ventanas, rutas
 │   ├── data_norgate.py         precios/retornos diarios (DuckDB)
@@ -399,17 +378,12 @@ cambiar hiperparámetros.
 pip install -r requirements.txt
 ```
 
-**Recomendado: Google Colab** (TensorFlow viene preinstalado; sube
-`datos/APkey` y el zip de Norgate, o móntalos desde Drive). En local en
-Windows, `pip install tensorflow` (o `torch`) puede fallar con
-`OSError: [Errno 2] ... file name too long` — es el límite de 260
-caracteres de ruta de Windows chocando con las rutas internas del paquete
-(mucho más probable cuanto más larga sea la ruta del proyecto), no un
-problema de este proyecto. Tres salidas:
-1. Activar *long paths* de Windows
-   (`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1`,
-   requiere admin).
-2. Un entorno **conda** con una ruta corta suele bastar sin tocar el
+En Windows, `pip install tensorflow` (o `torch`) puede fallar con
+`OSError: [Errno 2] ... file name too long` — el límite de 260 caracteres
+de ruta de Windows chocando con las rutas internas del paquete (más
+probable cuanto más larga sea la ruta del proyecto). Tres salidas:
+
+1. Un entorno **conda** con una ruta corta suele bastar sin tocar el
    registro, porque `envs/<nombre>/...` es mucho más corto que la ruta del
    repo bajo `Desktop\...`:
    ```bash
@@ -417,7 +391,11 @@ problema de este proyecto. Tres salidas:
    conda activate taller_gen
    pip install -r requirements.txt
    ```
-3. WSL o Colab.
+2. Activar *long paths* de Windows
+   (`HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1`,
+   requiere admin).
+3. WSL o Google Colab (TensorFlow viene preinstalado; sube `datos/APkey` y
+   el zip de Norgate, o móntalos desde Drive).
 
 La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
 `src.config.load_eodhd_api_key()` — nunca se imprime ni se commitea.
@@ -430,8 +408,9 @@ La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
 2. `notebooks/00_descarga_datos.ipynb` — descarga (cachea) EODHD y
    construye el pool real. Tarda ~15-20 min la primera vez (150 tickers ×
    ~5 años de barras de 5 min); las siguientes ejecuciones usan la caché.
-3. `01` → `02` → `03` en orden (no necesitan TensorFlow).
-4. `04` → `05` (requieren TensorFlow — Colab).
+3. `01` → `02` → `03` → `04` → `05` en orden. `02` y `04` requieren
+   TensorFlow; `04` es el más lento (varios modelos entrenados hasta
+   convergencia con `EarlyStopping` de paciencia alta — ver §4).
 
 ## 9. Limitaciones y trabajo futuro
 
@@ -446,40 +425,29 @@ La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
 - La rejilla de arquitecturas (notebook 04) usa los hiperparámetros por
   defecto de `src/modelos.py`; con más tiempo de cómputo valdría la pena
   una búsqueda más fina (learning rate, tamaño de ventana, nº de capas).
-- El generador de la GAN termina en `activation='tanh'` (igual que
-  `Taller_GANs.ipynb`), con rango útil real en `[-1, 1]` — pero nuestras
-  columnas valen típicamente 0.01-0.03 en magnitud, muy por debajo de eso:
-  sin corregir esto, el generador solo usaría una rebanada minúscula del
-  rango de `tanh` cerca de 0, perdiendo resolución. `GANGenerator.fit()`
-  reescala cada columna por su percentil 99.5 de `|valor|` ANTES de
-  entrenar (así el generador aprovecha el rango completo de `tanh`) y
-  deshace el reescalado en `.sample()` — práctica estándar en GANs, no
-  cambia el modelo, solo la escala en la que opera. Confirmado
-  empíricamente en el barrido de hiperparámetros (§6.2): mejora la
-  distancia de Frobenius de ~1.25 a ~1.05 manteniendo el resto de
-  hiperparámetros iguales.
-- **El GAN sobre Keras 3 no funcionaba en absoluto** hasta que se probó con
-  TensorFlow real (este proyecto se desarrolló casi entero sin poder
-  instalar TensorFlow localmente — ver §8): el truco clásico de
-  `Taller_GANs.ipynb` (congelar el discriminador y compilar un modelo
-  combinado) depende de que Keras fije la lista de variables entrenables
-  al compilar y no la actualice después; en Keras 3 se comprobó
-  empíricamente que ya no es así, así que el discriminador dejaba de
-  aprender del todo. Se reescribió con pasos manuales de `tf.GradientTape`
-  (ver `src/generators.py::GANGenerator`, ~20x más rápido que la
-  alternativa de recompilar en cada paso).
-- **El GAN, ya funcionando, colapsa de modo** (mode collapse: el generador
-  aprende a producir casi el mismo punto sin importar el ruido de entrada)
-  en este problema de baja dimensión (d=5) — un fallo bien documentado de
-  los GAN vainilla con pérdida BCE, no un error de esta implementación. Un
-  barrido de hiperparámetros (learning rate, nº de pasos de discriminador
-  por paso de generador, tamaño de red, nº de epochs) redujo bastante el
-  problema sin cambiar de familia de modelo (seguir siendo el GAN vainilla
-  de clase): con la configuración de `Taller_GANs.ipynb` (Adam por
-  defecto, lr=1e-3) la distancia de Frobenius real-vs-sintético del
-  notebook 02 fue **~3.0** (colapso severo); bajando a **lr=1e-4** bajó a
-  **~1.3**; añadiendo además **2 pasos de discriminador por cada paso de
-  generador** bajó a **~1.25** — todavía peor que RBIG/Gaussiana/Ruido
-  (~0.4-0.5) pero muy lejos del colapso total. Más epochs (probado hasta
-  3000) EMPEORA el colapso, no lo mejora — otro indicio de que es
-  colapso de modo y no falta de entrenamiento.
+- El generador de la GAN termina en `activation='tanh'`, con rango útil
+  real en `[-1, 1]` — pero nuestras columnas valen típicamente 0.01-0.03 en
+  magnitud, muy por debajo de eso. `GANGenerator.fit()` reescala cada
+  columna por su percentil 99.5 de `|valor|` antes de entrenar (así el
+  generador aprovecha el rango completo de `tanh`) y deshace el reescalado
+  en `.sample()` — práctica estándar en GANs, no cambia el modelo, solo la
+  escala en la que opera.
+- **El GAN entrena con pasos manuales de `tf.GradientTape`** (ver
+  `src/generators.py::GANGenerator`) en vez del truco clásico de Keras 1/2
+  de congelar el discriminador y compilar un modelo combinado
+  (`Taller_GANs.ipynb`): ese truco depende de que Keras fije la lista de
+  variables entrenables al compilar y no la actualice después, algo que
+  Keras 3 ya no garantiza. Con `GradientTape` se piden gradientes solo de
+  las variables del discriminador (paso D) o solo de las del generador
+  (paso G), sin depender de esa gestión interna de `.trainable`.
+- **El GAN colapsa de modo** (mode collapse: el generador aprende a
+  producir casi el mismo punto sin importar el ruido de entrada) en este
+  problema de baja dimensión (d=5) — un fallo bien documentado de los GAN
+  vainilla con pérdida BCE, no un error de esta implementación.
+  `learning_rate=1e-4` (Adam por defecto usa 1e-3) y 2 pasos de
+  discriminador por cada paso de generador (`d_steps_per_g=2`) reducen el
+  colapso sustancialmente frente a la configuración por defecto de clase,
+  sin cambiar de familia de modelo — pero el GAN sigue siendo, de los 4, el
+  que peor reproduce la correlación conjunta real (§6.1). Entrenar más
+  epochs no ayuda una vez alcanzado ese punto: es colapso de modo, no falta
+  de entrenamiento.
