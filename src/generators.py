@@ -272,6 +272,21 @@ class GANGenerator(BaseGenerator):
         d = XY_flat.shape[1]
         XY_flat = XY_flat.astype("float32")
 
+        # El generador termina en activation='tanh' (fiel a Taller_GANs.ipynb),
+        # que solo tiene rango util en [-1, 1] y satura fuera. Nuestras
+        # columnas (retorno diario, volatilidad realizada, ...) valen
+        # tipicamente 0.01-0.03 en magnitud -> siempre caen en la zona
+        # practicamente lineal de tanh (tanh(x)=x para x pequeno), pero la
+        # cola (hasta los limites de sensatez de config.POOL_MAX_*, hasta
+        # 1.0 en hl_range) se comprimiria de forma notable sin reescalar.
+        # Se reescala cada columna por su percentil 99.5 de |valor| ANTES
+        # de entrenar (asi el generador usa el rango completo de tanh, no
+        # solo una rebanada minuscula cerca de 0) y se deshace al muestrear
+        # — practica estandar en GANs, no cambia el modelo, solo la escala
+        # en la que opera.
+        self.scale_ = np.maximum(np.percentile(np.abs(XY_flat), 99.5, axis=0), 1e-6).astype("float32")
+        XY_scaled = XY_flat / self.scale_
+
         self.gen_ = modelos.build_gan_generator(self.latent_dim, d, self.gen_hidden)
         self.disc_ = modelos.build_gan_discriminator(d, self.disc_hidden)
 
@@ -318,8 +333,8 @@ class GANGenerator(BaseGenerator):
             # redujo aun mas el colapso de modo (ver notebook 02 / README).
             for _ in range(self.d_steps_per_g):
                 batch_discr = max(1, int(round(ratio * batch)))
-                idx = np.random.randint(0, len(XY_flat) - batch_discr) if len(XY_flat) > batch_discr else 0
-                legit = XY_flat[idx : idx + batch_discr]
+                idx = np.random.randint(0, len(XY_scaled) - batch_discr) if len(XY_scaled) > batch_discr else 0
+                legit = XY_scaled[idx : idx + batch_discr]
 
                 noise = np.random.normal(0, 1, (batch_discr, self.latent_dim)).astype("float32")
                 synth = self.gen_.predict(noise, verbose=0)
@@ -344,7 +359,8 @@ class GANGenerator(BaseGenerator):
 
     def sample(self, n_samples: int) -> np.ndarray:
         noise = np.random.normal(0, 1, (n_samples, self.latent_dim))
-        return self.gen_.predict(noise, verbose=0)
+        synth_scaled = self.gen_.predict(noise, verbose=0)
+        return synth_scaled * self.scale_  # deshace el reescalado de fit()
 
 
 GENERATOR_REGISTRY = {

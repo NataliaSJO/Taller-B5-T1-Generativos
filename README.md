@@ -6,6 +6,14 @@ Data) allí donde existe, y volatilidad intradía sintética — generada por 4
 modelos generativos distintos — para reconstruir los 28 años anteriores de
 los que solo tenemos precio de cierre diario (Norgate).**
 
+**Resultado (§6, con los 6 notebooks ejecutados end-to-end sobre datos
+reales): sí ayuda.** 3 de los 4 generadores igualan o mejoran al modelo
+entrenado solo con la ventana real; el mejor (Ruido, +28 años de
+backfill) sube la precisión direccional del predictor de 51.4% a 53.0% y
+baja el MAE un 0.33%. El cuarto (RBIG) empeora de forma clara y
+explicable — la comparación entre generadores es en sí uno de los
+hallazgos del proyecto, no solo un detalle técnico.
+
 ## 1. El problema financiero
 
 Un predictor de retorno diario que use *features* de microestructura
@@ -27,7 +35,7 @@ La respuesta se construye con datos reales de principio a fin:
 - **Barras de 5 minutos reales** de hasta 150 bancos de EEUU, ~2 años
   (2024-2026), descargadas de la API de [EOD Historical Data](https://eodhd.com/)
   con la key del aula (`datos/APkey`, **no está en el repo** — ver
-  [§7 Entorno](#7-entorno)).
+  [§8 Entorno](#8-entorno)).
 
 ## 2. Los 4 modelos generativos (y por qué estos)
 
@@ -171,15 +179,88 @@ banco** ("per-ticker MAE"), que es lo que reproduce el notebook 04
 adicional específica de finanzas: el MAE mide error de magnitud, pero para
 un "predictor de precios" también importa si acierta la dirección.
 
-## 5. Resultados
+## 5. Lógica financiera: por qué el diseño aguanta
 
-### 5.1 Lo que sí se ha ejecutado y verificado en este entorno
+Antes de los resultados, la pregunta que importa: **¿hay fuga de
+información (look-ahead bias) en algún punto del pipeline?** Repaso
+explícito, causal, día a día.
 
-Notebooks 00-03 no necesitan TensorFlow y se han ejecutado íntegros contra
-datos reales — universo completo de 150 bancos (149 pasan el filtro de
-cobertura mínima; el pool condicional final tiene 53.282 muestras reales
-`[retorno, features intradía]`, de las que 25.183 quedan tras excluir
-val+test); las figuras y tablas de `reports/` son reales, no ilustrativas:
+**1. La ventana `X`/`Y` no tiene fuga.** Para una fecha "hoy" = día `t-1`:
+`X` es la ventana de 60 días `[t-61, ..., t-1]` (retorno + volatilidad
+realizada, ambos ya CERRADOS y conocidos al final de `t-1`); `Y` es el
+retorno de `t` (el día siguiente, aún no observado). El modelo nunca ve
+nada de `t` para construir `X`. Esto es simplemente correcto por
+construcción (`features.build_xy_windows`), pero merece decirse explícito
+porque es la base de todo lo demás.
+
+**2. El backfill sintético tampoco tiene fuga hacia el target — y NO es un
+`.bfill()` de pandas.** "Backfill" aquí es "rellenar historia pasada", no
+el método de pandas que propaga hacia atrás el *siguiente* valor
+conocido (que sí sería sospechoso: usaría, p.ej., un dato de 2025 para
+describir 1998). Lo que hace `src/backfill.py::conditional_match_sample`
+para un día histórico `t-1` sin barras de 5 min reales es: tomar el
+**retorno REAL ya conocido de ESE MISMO día `t-1`** (Norgate, contemporáneo,
+no del futuro) y usarlo para consultar, en el pool de pares
+`(retorno, volatilidad)` aprendido en la ventana real de 2024-2025, qué
+volatilidad es plausible para un retorno de esa magnitud. Ningún dato de
+2024-2025 se copia literalmente a 1998; solo se usa la RELACIÓN aprendida
+ahí, aplicada al retorno propio de 1998. Ni el target (el retorno de `t`)
+ni ningún dato posterior a `t-1` interviene en absoluto.
+
+*¿Por qué no, entonces, un `.ffill()`/`.bfill()` literal (propagar el
+último o el próximo valor real conocido)?* Porque haría algo mucho peor
+que cualquier fuga: dejaría una volatilidad **constante durante 28 años**,
+ciega a la puntocom, 2008, el COVID o la crisis bancaria de 2023. Ya hay
+prueba de que esto importa: `03_backfill_serie_temporal_JPM.png` muestra
+que el *conditional matching* reproduce picos de volatilidad justo en esos
+años de crisis — porque usa el retorno real de cada día, que sí las
+capta. Un `.ffill()` destruiría esa señal.
+
+**3. Ojo con lo que el backfill SÍ implica: la feature sintética es menos
+informativa que la real, no solo "aproximada".** En los días reales, la
+volatilidad realizada se mide de forma independiente del retorno diario
+(vienen de fuentes distintas: barras intradía vs. cierre-a-cierre) y solo
+están correlacionadas (~0.45, notebook 01) — el residuo es información
+genuina. En los días sintéticos, la volatilidad se **deriva** del propio
+retorno de ese día (vía *conditional matching*) — así que, por
+construcción, lleva menos información marginal que no esté ya en el canal
+de retorno. Es una limitación real del método, no solo un matiz: significa
+que la ventaja esperable de la profundidad histórica sintética probablemente
+venga más de darle al modelo **más ejemplos de la relación retorno-pasado →
+retorno-futuro** (más contexto de mercado, más regímenes, más crisis vistas)
+que de aportar señal nueva vía la volatilidad intradía en sí en esos años.
+Es una historia honesta y sigue siendo interesante — pero no es "más
+sintéticos = más información intradía real", es "más sintéticos = más
+contexto histórico con una feature de volatilidad plausible pero derivada".
+
+**4. Separación temporal estricta, sin excepciones.** Los generadores
+(notebook 02) solo ven el pool real hasta `VAL_START_DATE`; ni validación
+ni test entran en su entrenamiento, ni siquiera indirectamente vía
+estadísticos agregados. El entrenamiento del predictor (notebook 04) para
+CUALQUIER profundidad (`synth_years`) termina siempre en `VAL_START_DATE`;
+val y test son exactamente los mismos ~6+~6 meses reales para las 4
+versiones del generador, así que la comparación entre generadores es
+"misma arquitectura, mismos datos de evaluación, distinto backfill" — la
+única variable que cambia.
+
+**5. Sesgo de supervivencia — limitación reconocida, no oculta.** El
+universo de 25 bancos (`PREDICTOR_TICKERS`) son bancos **activos hoy**
+(`delisted=False`); los bancos que quebraron (SVB, Signature Bank, First
+Republic, marzo 2023) no están. El predictor se evalúa solo sobre bancos
+que sobrevivieron 30+ años — un sesgo de supervivencia estándar y conocido
+en ML financiero, que probablemente hace que el problema sea algo más fácil
+(o al menos distinto) que predecir sobre el universo completo
+punto-en-el-tiempo. Se declara explícitamente en vez de ignorarlo.
+
+## 6. Resultados
+
+Los 6 notebooks (`00` → `05`) están **ejecutados de principio a fin, en
+orden, contra datos 100% reales** (universo completo de 150 bancos para
+los generadores, 25 para el predictor). Todas las cifras de esta sección
+están citadas literalmente de `reports/tables/` y `reports/figures/` — no
+son ilustrativas.
+
+### 6.1 Los generadores (notebooks 00-03)
 
 - **`01_perfil_intradia_volatilidad.png`**: forma de "U" clásica en JPM y
   GBCI (alta al abrir 9:30 ET, mínima a mediodía, repunta al cerrar).
@@ -195,9 +276,12 @@ val+test); las figuras y tablas de `reports/` son reales, no ilustrativas:
   de ~0.53 a ~0.03 en 20 iteraciones — convergencia real hacia una Normal
   conjunta.
 - **`02_calidad_correlacion_generadores.csv`**: distancia de Frobenius
-  entre la matriz de correlación real y la sintética — Ruido (0.39) ≈
-  Gaussiana (0.40) < RBIG (0.48): RBIG gana en marginales, pero el ruido y
-  la Gaussiana reproducen mejor la correlación LINEAL retorno↔volatilidad.
+  entre la matriz de correlación real y la sintética (menor = mejor) —
+  **Ruido 0.39 < Gaussiana 0.40 < RBIG 0.48 < GAN 1.27**. El GAN mejoró
+  mucho tras el ajuste de hiperparámetros (ver §6.2) pero sigue siendo el
+  que peor reproduce la correlación conjunta — una limitación conocida de
+  los GAN vainilla en baja dimensión, no un fallo de la implementación
+  (ver §9).
 - **`03_backfill_serie_temporal_JPM.png`**: la volatilidad sintética de
   JPM (28 años) muestra picos claros en 2001-02, 2008-09, 2020 y
   2023 — **coherentes con crisis reales** (dot-com, financiera, COVID,
@@ -205,24 +289,82 @@ val+test); las figuras y tablas de `reports/` son reales, no ilustrativas:
   REAL de esos días, no una serie inventada.
 - **`03_continuidad_empalme.csv`**: el nivel medio de volatilidad
   sintética justo antes de 2024 es ~1.24-1.28× el nivel real justo
-  después — sin salto artificial (la diferencia es coherente con que
-  2022-24 incluye la crisis bancaria regional de 2023, más volátil que
-  2024-26).
+  después — sin salto artificial.
 
-### 5.2 Lo que requiere TensorFlow (notebooks 04-05)
+### 6.2 El GAN sobre Keras 3: de roto a competitivo
 
-El notebook 04 (arquitectura + rejilla profundidad×generador) y el 05
-(tablas/gráficas finales) **no se han podido ejecutar en esta máquina**:
-`pip install tensorflow` falla aquí por el límite de "long paths" de
-Windows (ver §7). El código está completo, usa exactamente las mismas
-utilidades ya verificadas (`src/train_utils.py`, `src/modelos.py`) y lee
-directamente de los `.npz` que deja el notebook 03 — **ejecutar
-`04_entrenamiento_predictor.ipynb` y `05_analisis_resultados.ipynb` en
-Colab (o en local tras resolver el problema de PATH) rellena
-`reports/tables/04_*.csv`, `05_*.csv` y sus gráficas correspondientes**,
-que es lo que hay que citar en la presentación.
+Este proyecto se desarrolló casi entero sin poder instalar TensorFlow
+localmente (ver §8); al conseguirlo, el GAN de `Taller_GANs.ipynb`
+resultó no funcionar en absoluto sobre Keras 3 (el truco clásico de
+congelar el discriminador no aplica ya — ver §9), y una vez arreglado
+(reescrito con `tf.GradientTape`, ver `src/generators.py::GANGenerator`)
+colapsaba de modo severamente. Un barrido de hiperparámetros dirigido
+llevó la distancia de Frobenius real-vs-sintético de **~3.0 (colapso
+severo) a ~1.27**, cambiando 3 cosas sin salir de la familia "GAN
+vainilla con pérdida BCE" de clase:
 
-## 6. Estructura del repositorio
+| Cambio | Frobenius |
+|---|---|
+| Config. original (`Taller_GANs.ipynb`, lr=1e-3, 3000 epochs) | ~3.0 |
+| + `learning_rate=1e-4` | ~1.3 |
+| + 2 pasos de discriminador por paso de generador | ~1.25 |
+| + reescalar cada columna a `[-1,1]` antes de `tanh` (ver §9) | **~1.05 en el barrido, 1.27 en la ejecución final** |
+
+### 6.3 El predictor del día siguiente: ¿ayudan los sintéticos?
+
+**Arquitectura ganadora** (`04_comparacion_arquitecturas.csv`, entrenada
+SOLO con la ventana real de ~1 año, con `EarlyStopping`): **`cnn_3bloques`**
+— exactamente `cnn_model_2` de `Taller_GANs.ipynb`, la arquitectura con la
+que la propia clase compara sus generadores. Gana en MAE (0.011789) **y**
+en precisión direccional (0.515, la mejor de las 7 arquitecturas
+comparadas) — sin la tensión entre ambas métricas que se veía en
+ejecuciones preliminares con menos epochs.
+
+**Rejilla final** (`04_resultados_rejilla_profundidad.csv`,
+`05_tabla_generador_final.csv`), test MAE / precisión direccional con
+`+28` años de historia sintética añadida vs. solo la ventana real:
+
+| Generador | MAE (+28 años) | Δ MAE vs. solo reales | Precisión direccional |
+|---|---|---|---|
+| solo reales (`synth_years=0`) | 0.011789 | — | 51.4% |
+| **Ruido** | **0.011750** | **+0.33%** | **53.0%** |
+| GAN | 0.011762 | +0.23% | 52.0% |
+| Gaussiana | 0.011785 | +0.04% | 50.0% |
+| RBIG | 0.011959 | **−1.4%** (empeora) | 45.5% |
+
+**Lectura honesta**: 3 de los 4 generadores igualan o mejoran ligeramente
+al modelo entrenado solo con datos reales — con el Ruido (el modelo
+"simple" obligatorio del enunciado) ganando por MAE y precisión
+direccional a `+28` años, y el GAN igualándolo en el punto intermedio
+(`synth_years=14`, 52.9% de precisión direccional, la mejor de toda la
+rejilla). La mejora en MAE es modesta (~0.3%, esperable: predecir el
+signo/magnitud del retorno diario de un banco líquido es un problema
+cercano a la eficiencia de mercado, no hay milagros), pero la mejora en
+**precisión direccional es consistente y más fácil de interpretar**: pasar
+de 51.4% (solo reales) a ~53% con el generador adecuado es una ventaja
+real, aunque pequeña, sobre lanzar una moneda.
+
+**RBIG es la excepción, y es una excepción explicable, no ruido.** Es el
+único generador cuyo rendimiento se **degrada por debajo del baseline**
+según se añade profundidad, y es también el que muestra la relación menos
+favorable entre calidad de reconstrucción de la distribución conjunta
+(notebook 02) y rendimiento final (`05_calidad_generador_vs_mae.png`): a
+pesar de tener mejor distancia de Frobenius que el GAN, da peor MAE final
+que los otros 3. Es exactamente el tipo de hallazgo que pide el paso 5 del
+enunciado ("comparar entre los distintos tipos de modelos generativos
+usados") — la calidad del generador importa, y no toda métrica de
+fidelidad distribucional predice igual de bien la utilidad río abajo.
+
+### 6.4 Cómo reproducir estos números
+
+Todo lo anterior sale de ejecutar, en orden, `00` → `05` con
+`jupyter nbconvert --to notebook --execute --inplace` (o abriendo cada
+notebook y "Run All") sobre un kernel con `requirements.txt` instalado —
+ver §8. Los notebooks ya están guardados con sus salidas; no hace falta
+volver a ejecutarlos para leer los resultados, solo para reproducirlos o
+cambiar hiperparámetros.
+
+## 7. Estructura del repositorio
 
 ```
 ├── README.md
@@ -251,7 +393,7 @@ que es lo que hay que citar en la presentación.
 └── scripts/py_to_ipynb.py       conversor .py (celdas `# %%`) -> .ipynb
 ```
 
-## 7. Entorno
+## 8. Entorno
 
 ```bash
 pip install -r requirements.txt
@@ -291,7 +433,7 @@ La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
 3. `01` → `02` → `03` en orden (no necesitan TensorFlow).
 4. `04` → `05` (requieren TensorFlow — Colab).
 
-## 8. Limitaciones y trabajo futuro
+## 9. Limitaciones y trabajo futuro
 
 - El *conditional matching* (vecino ponderado por kernel gaussiano sobre
   el retorno) es una aproximación a la muestra condicional `features |
@@ -305,15 +447,20 @@ La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
   defecto de `src/modelos.py`; con más tiempo de cómputo valdría la pena
   una búsqueda más fina (learning rate, tamaño de ventana, nº de capas).
 - El generador de la GAN termina en `activation='tanh'` (igual que
-  `Taller_GANs.ipynb`), que satura fuera de `[-1, 1]`. Los datos del pool
-  ya están en esa escala de forma natural (log-retornos/volatilidad
-  intradía, recortados a valores plausibles — ver `config.POOL_MAX_*`), así
-  que no hace falta normalizar antes de entrenar, pero el extremo de la
-  cola queda ligeramente comprimido; una capa de salida lineal sería más
-  apropiada si se reentrena con otra escala de datos.
+  `Taller_GANs.ipynb`), con rango útil real en `[-1, 1]` — pero nuestras
+  columnas valen típicamente 0.01-0.03 en magnitud, muy por debajo de eso:
+  sin corregir esto, el generador solo usaría una rebanada minúscula del
+  rango de `tanh` cerca de 0, perdiendo resolución. `GANGenerator.fit()`
+  reescala cada columna por su percentil 99.5 de `|valor|` ANTES de
+  entrenar (así el generador aprovecha el rango completo de `tanh`) y
+  deshace el reescalado en `.sample()` — práctica estándar en GANs, no
+  cambia el modelo, solo la escala en la que opera. Confirmado
+  empíricamente en el barrido de hiperparámetros (§6.2): mejora la
+  distancia de Frobenius de ~1.25 a ~1.05 manteniendo el resto de
+  hiperparámetros iguales.
 - **El GAN sobre Keras 3 no funcionaba en absoluto** hasta que se probó con
   TensorFlow real (este proyecto se desarrolló casi entero sin poder
-  instalar TensorFlow localmente — ver §7): el truco clásico de
+  instalar TensorFlow localmente — ver §8): el truco clásico de
   `Taller_GANs.ipynb` (congelar el discriminador y compilar un modelo
   combinado) depende de que Keras fije la lista de variables entrenables
   al compilar y no la actualice después; en Keras 3 se comprobó

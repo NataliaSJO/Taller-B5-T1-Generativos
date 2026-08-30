@@ -5,6 +5,16 @@ SINTETICO consistente con ese retorno, a partir de un pool de muestras
 conjuntas [retorno, features] generado por uno de los 4 generadores
 (src/generators.py) entrenados sobre la ventana real de 2 anios.
 
+*** "Backfill" aqui NO es pandas `.bfill()` *** (que propaga hacia atras
+el SIGUIENTE valor conocido, usando datos del futuro para rellenar el
+pasado — eso si seria sospechoso). Aqui, para cada dia sin 5 min reales,
+se usa el retorno REAL Y CONTEMPORANEO de ESE MISMO dia (nunca del
+futuro, nunca el target) para consultar que feature intradia es plausible
+segun la relacion aprendida en la ventana real reciente. Ver README,
+seccion "Logica financiera", para el argumento completo de por que no hay
+fuga de informacion y por que un `.ffill()`/`.bfill()` literal seria peor
+(dejaria una volatilidad constante 28 anios, ciega a todas las crisis).
+
 Los generadores de src/generators.py son todos INCONDICIONALES: aprenden la
 distribucion conjunta (retorno, features) y solo saben muestrear pares
 nuevos de esa conjunta, no "features | retorno=x" directamente. Para
