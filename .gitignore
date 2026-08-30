@@ -36,6 +36,23 @@ htmlcov/
 .env
 .env.*
 
+# Secrets / API keys
+datos/APkey
+**/APkey
+*.key
+
+# Large / raw data (not para git; se regenera o se descarga en local
+# ejecutando notebooks/00_descarga_datos.ipynb)
+datos/*.zip
+datos/*.duckdb
+datos/extracted/
+datos/raw/
+datos/interim/
+*.duckdb
+
+# reports/figures/ y reports/tables/ SI se versionan: son la evidencia de
+# que el codigo genera las graficas/tablas que pide el enunciado.
+
 # IDEs and editors
 .vscode/
 .idea/
