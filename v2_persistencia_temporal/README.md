@@ -168,10 +168,55 @@ en el tramo histórico, y estaríamos midiendo si el sintético predice al
 sintético. Con Garman-Klass el target es real en los 30 años y lo único
 sintético sigue siendo la entrada.
 
-Se compara contra el baseline que importa en predicción de volatilidad —
-**el ingenuo `vol(t+1) = vol(t)`** — porque una correlación alta en bruto
-no significa nada si no bate a la persistencia. En el test real ese
-baseline da MAE 0.00508 sobre un nivel medio de 0.0139 y R² = −0.29, así
-que hay margen de sobra para demostrar aprendizaje.
+### Rigor financiero
+
+- **Se modela log-volatilidad, no volatilidad en nivel.** La volatilidad
+  realizada es aproximadamente lognormal (Andersen, Bollerslev, Diebold &
+  Labys, 2003). No es un detalle: la primera versión de este experimento
+  usaba nivel con pérdida MAE, cuyo óptimo es la **mediana condicional**,
+  y la red degeneró a emitir casi una constante — batía al ingenuo en MAE
+  con correlación 0.067. El baseline constante da correlación 0.065: la
+  coincidencia confirma el diagnóstico de forma medible.
+- **El benchmark es HAR-RV** (Corsi, 2009), no el paseo aleatorio. Regresa
+  la volatilidad de mañana sobre las medias diaria, semanal y mensual;
+  captura la memoria larga con tres coeficientes y es notoriamente difícil
+  de batir. Batir a un ingenuo ruidoso no significa nada.
+- **Tres baselines**, no uno: ingenuo, constante (detector de colapso) y
+  HAR.
+- **QLIKE** (Patton, 2011) como pérdida principal: es robusta a que la
+  volatilidad no se observe sino que se estime con ruido, condición bajo
+  la cual otras métricas ordenan mal los modelos.
+- **Regresión de Mincer-Zarnowitz**: pendiente 1 = bien calibrado.
+
+Ajustados sobre el test real (122 días):
+
+| | RMSE log | R² | corr | QLIKE | pendiente MZ |
+|---|---|---|---|---|---|
+| ingenuo | 0.4506 | −0.164 | 0.417 | 0.5223 | 0.418 |
+| constante | 0.4227 | −0.024 | 0.065 | 0.4410 | 0.280 |
+| **HAR-RV** | **0.3712** | **+0.210** | **0.465** | **0.3448** | **0.863** |
+
+Coeficientes HAR: +0.199 diario, +0.343 semanal, +0.393 mensual, suma
+0.935 — positivos, crecientes con el horizonte y con reversión a la media,
+el patrón que reporta la literatura. **HAR alcanza R² fuera de muestra de
++0.21**, así que en este target sí hay señal demostrable, cosa que con el
+target de retornos nunca se pudo enseñar.
+
+### Rigor de IA
+
+- **El modelo ve la misma información que sus baselines.** En la primera
+  versión no la veía: el canal de volatilidad de la entrada era la
+  realizada de 5 min mientras el target era Garman-Klass, así que se le
+  pedía autorregresión sobre una serie ausente de su entrada y se le
+  comparaba contra un ingenuo que sí la tenía. La comparación estaba
+  amañada en su contra. Ahora el log-GK real entra como canal.
+- **Estandarización con estadísticos solo del tramo de entrenamiento** de
+  cada configuración; los globales filtrarían información del test.
+- **Varias semillas** con desviación reportada — en este proyecto el ruido
+  de inicialización resultó ser del mismo orden que los efectos medidos.
+- **Diebold-Mariano** (1995) con errores estándar HAC de Newey-West sobre
+  el diferencial de pérdida promediado **por día**. Los 25 bancos del mismo
+  día comparten un factor sectorial: tratar las 3.050 predicciones como
+  independientes exagera la significancia unas 5 veces.
 
 Resultados en `reports/tables/v2_target_volatilidad.csv`.
