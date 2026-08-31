@@ -6,13 +6,16 @@ Data) allí donde existe, y volatilidad intradía sintética — generada por 4
 modelos generativos distintos — para reconstruir los 28 años anteriores de
 los que solo tenemos precio de cierre diario (Norgate).**
 
-**Resultado (§6, con los 6 notebooks ejecutados end-to-end sobre datos
-reales): sí ayuda.** 3 de los 4 generadores igualan o mejoran al modelo
-entrenado solo con la ventana real; el mejor (Ruido, +28 años de backfill)
-sube la precisión direccional del predictor de 51.4% a 53.0% y baja el MAE
-un 0.33%. El cuarto (RBIG) empeora de forma clara y explicable — la
-comparación entre los 4 tipos de generador es en sí uno de los hallazgos
-del proyecto, no solo un detalle técnico.
+**Resultado (§6-7, con los 6 notebooks ejecutados end-to-end sobre datos
+reales): sí ayuda, poco, y da igual con qué generador.** Añadir ~28 años
+de historia reconstruida sintéticamente sube la precisión direccional del
+predictor de ~50-51% a ~52-53% y baja el MAE ~0.3-0.5%. Pero el hallazgo
+más sólido es el negativo: tras **7.426 evaluaciones** optimizando la
+fidelidad distribucional de los generadores, un experimento controlado
+(§6.3) muestra que **esa fidelidad no predice la utilidad real** — variando
+la calidad del generador un factor 2.266×, el rendimiento final varía un
+0.64%. El GAN mejor optimizado no bate a añadir ruido gaussiano a datos
+reales.
 
 ## 1. El problema financiero
 
@@ -35,7 +38,7 @@ La respuesta se construye con datos reales de principio a fin:
 - **Barras de 5 minutos reales** de hasta 150 bancos de EEUU, ~2 años
   (2024-2026), descargadas de la API de [EOD Historical Data](https://eodhd.com/)
   con la key del aula (`datos/APkey`, **no está en el repo** — ver
-  [§8 Entorno](#8-entorno)).
+  [§9 Entorno](#9-entorno)).
 
 ## 2. Los 4 modelos generativos (y por qué estos)
 
@@ -261,7 +264,12 @@ orden, contra datos 100% reales** (universo completo de 150 bancos para
 los generadores, 25 para el predictor). Todas las cifras de esta sección
 están citadas literalmente de `reports/tables/` y `reports/figures/`.
 
-### 6.1 Los generadores (notebooks 00-03)
+### 6.1 Los generadores con los hiperparámetros de clase (notebooks 00-03)
+
+> Esta subsección refleja la ejecución con los hiperparámetros **de
+> partida** (los del material de clase). La búsqueda de §6.2 los mejora
+> sustancialmente, así que las cifras de aquí sirven como **punto de
+> comparación**, no como resultado final.
 
 - **`01_perfil_intradia_volatilidad.png`**: forma de "U" clásica en JPM y
   GBCI (alta al abrir 9:30 ET, mínima a mediodía, repunta al cerrar).
@@ -278,10 +286,14 @@ están citadas literalmente de `reports/tables/` y `reports/figures/`.
   conjunta.
 - **`02_calidad_correlacion_generadores.csv`**: distancia de Frobenius
   entre la matriz de correlación real y la sintética (menor = mejor) —
-  **Ruido 0.39 < Gaussiana 0.40 < RBIG 0.48 < GAN 1.27**. El GAN es el que
-  peor reproduce la correlación conjunta de los 4 — una limitación conocida
-  de los GAN vainilla en baja dimensión, no un fallo de la implementación
-  (ver §9).
+  **Ruido 0.39 < Gaussiana 0.40 < RBIG 0.48 < GAN 1.27**. El GAN es aquí el
+  que peor reproduce la correlación conjunta — pero **NO por una limitación
+  inherente**: con los hiperparámetros que encuentra la búsqueda (§6.2) baja
+  a **0.36**, a la altura de los demás. La primera versión de este informe
+  atribuía ese 1.27 a "una limitación conocida de los GAN vainilla en baja
+  dimensión"; el experimento lo desmiente y la explicación correcta es
+  simplemente que la configuración de clase no está ajustada para este
+  problema.
 - **`03_backfill_serie_temporal_JPM.png`**: la volatilidad sintética de
   JPM (28 años) muestra picos claros en 2001-02, 2008-09, 2020 y
   2023 — **coherentes con crisis reales** (dot-com, financiera, COVID,
@@ -291,7 +303,91 @@ están citadas literalmente de `reports/tables/` y `reports/figures/`.
   sintética justo antes de 2024 es ~1.24-1.28× el nivel real justo
   después — sin salto artificial.
 
-### 6.2 El predictor del día siguiente: ¿ayudan los sintéticos?
+### 6.2 Búsqueda de hiperparámetros de los generadores (7.426 evaluaciones)
+
+Los generadores no se dejaron con los hiperparámetros de clase: se hizo una
+búsqueda aleatoria paralelizada sobre **arquitectura e hiperparámetros**,
+midiendo la fidelidad de la distribución conjunta sintética frente a datos
+reales no vistos con tres métricas complementarias — **MMD** (kernel RBF,
+captura marginales *y* dependencia), **Wasserstein-1** medio sobre las
+marginales, y distancia de **Frobenius** entre matrices de correlación.
+Código en `scripts/hp_search_generators.py`; selección con la regla de
+"un error estándar" en `scripts/analizar_hpsearch.py`.
+
+| Generador | Configuración elegida | MMD | W1 | Frobenius |
+|---|---|---|---|---|
+| Ruido | σ=0.031, relativo, ruido **t-Student** (8 gl) | 0.000000 | 0.0281 | 0.322 |
+| Gaussiana | α=0.0035, marginal **`rank_gauss`** | 0.003674 | 0.0393 | 0.408 |
+| RBIG | **n_iters=100, grid=1000, rotación PCA** | 0.000000 | 0.0271 | 0.347 |
+| GAN | latent=48, 2000 ép., bs=64, lr=1e-3, **d_steps=5** | 0.001072 | 0.0852 | 0.362 |
+
+Tres resultados que corrigen afirmaciones de la versión anterior de este
+informe:
+
+1. **El colapso de modo del GAN era cuestión de hiperparámetros, no una
+   limitación inherente.** Con la configuración de clase, la distancia de
+   Frobenius era 1.27; con `d_steps_per_g=5` baja a **0.36**, a la altura
+   de RBIG. El parámetro decisivo resultó ser cuántos pasos de
+   discriminador se dan por cada paso de generador (W1 medio 1.20 con 1
+   paso → 0.27 con 5), y satura ahí: con 6 empeora.
+2. **La Gaussiana mejora 15× ajustándose a la cópula.** El marginal
+   `rank_gauss` (llevar cada columna a N(0,1) por su distribución
+   empírica, ajustar ahí la Normal y deshacer la transformación) aparece
+   en las cinco mejores configuraciones. La lectura financiera es limpia:
+   una Normal **no** puede representar las colas pesadas de los retornos,
+   pero **sí** su estructura de dependencia; separando ambas cosas, el
+   modelo gaussiano deja de ser el peor con diferencia.
+3. **RBIG tiene un óptimo, no mejora monótonamente.** Verificado
+   empíricamente: satura hacia 60-150 iteraciones y se **degrada** pasado
+   200 (W1 0.0292 → 0.0385 con 500), porque cada iteración añade error de
+   interpolación de la rejilla de cuantiles.
+
+### 6.3 El experimento clave: ¿predice la fidelidad la utilidad?
+
+Toda la búsqueda anterior optimiza una cosa (*¿se parece el sintético al
+real?*) que **no es** la pregunta del proyecto (*¿ayuda el sintético a
+predecir?*). Son criterios distintos y podían discrepar, así que se
+contrastó directamente: se cogieron 6 GAN que cubren **tres órdenes de
+magnitud** de calidad distribucional y, para cada uno, se recorrió el
+pipeline completo — entrenar GAN → muestrear → backfill de 28 años →
+entrenar el predictor → medir en el **mismo test real**
+(`scripts/experimento_espectro_gan.py`).
+
+| GAN | MMD | test MAE | precisión direccional |
+|---|---|---|---|
+| buena_1 | 0.00046 | **0.011827** ← el peor | 50.2% |
+| buena_2 | 0.00107 | 0.011759 | 51.8% |
+| buena_3 | 0.00189 | 0.011773 | 52.1% |
+| **intermedia** | 0.38711 | **0.011753** ← el mejor | **52.8%** |
+| mala | 0.54060 | 0.011764 | 52.1% |
+| muy_mala | 1.04254 | 0.011760 | 52.1% |
+
+**El GAN con mejor fidelidad de los 725 evaluados da el peor resultado
+aguas abajo**, y el mejor resultado lo da uno con un MMD 840× peor. Las
+correlaciones de Spearman entre fidelidad y MAE salen **negativas**
+(MMD −0.37, Frobenius −0.70).
+
+Ahora bien, la lectura correcta **no** es "peor generador, mejor
+predictor" — eso sería sobreinterpretar 6 puntos. Es esta: mientras el MMD
+varía un factor **2.266×**, todos los MAE caben en un **0.64%** de
+dispersión. Es decir, **la calidad distribucional del generador es
+prácticamente irrelevante para el rendimiento final**; las diferencias
+entre generadores están dentro del ruido.
+
+*¿Por qué?* Encaja con la limitación estructural documentada en §5.3: la
+volatilidad sintética se **deriva** del retorno real de cada día vía
+*conditional matching*. Por bien que el generador imite la distribución
+conjunta, la feature resultante aporta poca información marginal que no
+esté ya en el canal de retorno. La ganancia frente a "solo reales" viene
+de **tener más contexto histórico** con el que entrenar, no de la calidad
+del sintético.
+
+**Consecuencia metodológica**: el generador del pipeline final se elige
+por rendimiento aguas abajo, no por MMD. Y la misma cautela aplica al σ
+del Ruido, cuyas métricas de fidelidad lo empujan hacia σ→0, que es
+memorización pura (copiar datos reales) y no generación.
+
+### 6.4 El predictor del día siguiente: ¿ayudan los sintéticos?
 
 **Arquitectura ganadora** (`04_comparacion_arquitecturas.csv`, entrenada
 SOLO con la ventana real de ~1 año, con `EarlyStopping` de convergencia
@@ -334,16 +430,68 @@ enunciado ("comparar entre los distintos tipos de modelos generativos
 usados") — la calidad del generador importa, y no toda métrica de
 fidelidad distribucional predice igual de bien la utilidad río abajo.
 
-### 6.3 Cómo reproducir estos números
+### 6.5 Cómo reproducir estos números
 
 Todo lo anterior sale de ejecutar, en orden, `00` → `05` con
 `jupyter nbconvert --to notebook --execute --inplace` (o abriendo cada
 notebook y "Run All") sobre un kernel con `requirements.txt` instalado —
-ver §8. Los notebooks ya están guardados con sus salidas; no hace falta
+ver §9. Los notebooks ya están guardados con sus salidas; no hace falta
 volver a ejecutarlos para leer los resultados, solo para reproducirlos o
 cambiar hiperparámetros.
 
-## 7. Estructura del repositorio
+Las búsquedas de hiperparámetros y el experimento del espectro son
+scripts aparte, no notebooks, porque son procesos de horas que se
+paralelizan sobre todos los núcleos:
+
+```bash
+python scripts/hp_search_generators.py --minutes 400 --worker 0   # generadores
+python scripts/hp_search.py --stage A --walk-forward --embargo-days 60  # predictor
+python scripts/analizar_hpsearch.py                                # elegir ganadores
+python scripts/experimento_espectro_gan.py                         # fidelidad vs utilidad
+```
+
+## 7. Conclusiones
+
+**1. Sí, los datos sintéticos ayudan — poco, pero de forma consistente.**
+Entrenar con ~28 años de historia reconstruida sintéticamente mejora al
+modelo entrenado solo con el año real disponible: el MAE baja ~0.3-0.5% y
+la precisión direccional sube de ~50-51% a ~52-53%. La mejora en MAE es
+modesta y esperable (predecir el retorno diario de un banco líquido está
+cerca del límite de eficiencia de mercado), pero la de precisión
+direccional es más interpretable: pasar de "moneda al aire" a ~53% es una
+ventaja real, aunque pequeña.
+
+**2. Qué generador se use apenas importa — y ese es el hallazgo más
+sólido.** Es el resultado contraintuitivo de §6.3: variando la fidelidad
+distribucional del generador un factor 2.266×, el rendimiento final varía
+un 0.64%. Lo que aporta valor es **tener más contexto histórico con el que
+entrenar**, no la sofisticación del modelo generativo. Un GAN cuidadosamente
+optimizado no bate a añadir ruido gaussiano a datos reales.
+
+**3. La explicación es estructural, no accidental.** La volatilidad
+sintética se deriva, por construcción, del retorno real conocido de cada
+día. Por muy bien que se imite la distribución conjunta, esa feature
+aporta poca información marginal más allá del canal de retorno que el
+modelo ya tiene. Es el límite del método de *conditional matching*, y
+conviene decirlo con claridad en vez de vender la mejora como algo que no
+es.
+
+**4. Optimizar la métrica equivocada es un riesgo real, no teórico.** Se
+gastaron 7.426 evaluaciones optimizando fidelidad distribucional, y esa
+métrica resultó no predecir la utilidad. El caso extremo es el generador
+de Ruido: obtiene MMD ≈ 0 (fidelidad perfecta) simplemente **copiando**
+muestras reales — memorización, no generación. Sin el experimento de §6.3
+se habría elegido el generador por el criterio incorrecto sin saberlo.
+
+**5. Lo que sí mejoró de forma medible fue el proceso, no el resultado.**
+La búsqueda de hiperparámetros arregló problemas reales — el sobreajuste
+severo del predictor (curvas de validación divergentes), el colapso de
+modo del GAN (Frobenius 1.27 → 0.36), la Gaussiana ajustada a la cópula
+(15× mejor) — pero ninguna de esas mejoras se tradujo en un predictor
+mucho mejor. Es una lección honesta sobre dónde están los límites en este
+problema: no en el modelado generativo, sino en la señal disponible.
+
+## 8. Estructura del repositorio
 
 ```
 ├── README.md
@@ -369,10 +517,15 @@ cambiar hiperparámetros.
 ├── reports/
 │   ├── figures/*.png            todas las gráficas generadas (versionadas)
 │   └── tables/*.csv             todas las tablas generadas (versionadas)
-└── scripts/py_to_ipynb.py       conversor .py (celdas `# %%`) -> .ipynb
+└── scripts/
+    ├── py_to_ipynb.py           conversor .py (celdas `# %%`) -> .ipynb
+    ├── hp_search_generators.py  busqueda de hiperparametros de los 4 generadores
+    ├── hp_search.py             busqueda del predictor (walk-forward + purga)
+    ├── analizar_hpsearch.py     elige ganadores con la regla de 1 error estandar
+    └── experimento_espectro_gan.py   ¿predice la fidelidad la utilidad? (§6.3)
 ```
 
-## 8. Entorno
+## 9. Entorno
 
 ```bash
 pip install -r requirements.txt
@@ -412,7 +565,7 @@ La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
    TensorFlow; `04` es el más lento (varios modelos entrenados hasta
    convergencia con `EarlyStopping` de paciencia alta — ver §4).
 
-## 9. Limitaciones y trabajo futuro
+## 10. Limitaciones y trabajo futuro
 
 - El *conditional matching* (vecino ponderado por kernel gaussiano sobre
   el retorno) es una aproximación a la muestra condicional `features |
@@ -440,14 +593,23 @@ La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
   Keras 3 ya no garantiza. Con `GradientTape` se piden gradientes solo de
   las variables del discriminador (paso D) o solo de las del generador
   (paso G), sin depender de esa gestión interna de `.trainable`.
-- **El GAN colapsa de modo** (mode collapse: el generador aprende a
-  producir casi el mismo punto sin importar el ruido de entrada) en este
-  problema de baja dimensión (d=5) — un fallo bien documentado de los GAN
-  vainilla con pérdida BCE, no un error de esta implementación.
-  `learning_rate=1e-4` (Adam por defecto usa 1e-3) y 2 pasos de
-  discriminador por cada paso de generador (`d_steps_per_g=2`) reducen el
-  colapso sustancialmente frente a la configuración por defecto de clase,
-  sin cambiar de familia de modelo — pero el GAN sigue siendo, de los 4, el
-  que peor reproduce la correlación conjunta real (§6.1). Entrenar más
-  epochs no ayuda una vez alcanzado ese punto: es colapso de modo, no falta
-  de entrenamiento.
+- **El colapso de modo del GAN se resolvió con hiperparámetros.** Con la
+  configuración de clase el generador colapsa (produce casi el mismo punto
+  sin importar el ruido de entrada) y la distancia de Frobenius es 1.27.
+  La búsqueda (§6.2) lo lleva a **0.36**, al nivel de RBIG. El parámetro
+  decisivo es `d_steps_per_g` — cuántos pasos de discriminador se dan por
+  cada paso de generador — con mejora monótona (W1 medio 1.20 → 0.82 →
+  0.66 → 0.37 → **0.27** al pasar de 1 a 5 pasos) y saturación en 5. Más
+  epochs no ayuda una vez ahí. Conviene señalar el error de método que
+  esto destapó: en una primera pasada se recortó `d_steps=5` del espacio
+  de búsqueda "por coste", y resultó ser justo el parámetro más
+  influyente; el óptimo quedaba fuera del espacio explorado. Cuando el
+  mejor resultado cae en el **borde** de la rejilla de búsqueda, casi
+  siempre significa que la rejilla es demasiado estrecha, no que se haya
+  encontrado el óptimo.
+- **Pero nada de eso mejoró el predictor** (§6.3): la calidad
+  distribucional del generador resultó no predecir el rendimiento aguas
+  abajo. Es la limitación más importante de todo el trabajo, y es
+  estructural: la volatilidad sintética se deriva del retorno real de cada
+  día, así que aporta poca información marginal por muy bien modelada que
+  esté.
