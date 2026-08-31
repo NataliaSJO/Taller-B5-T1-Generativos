@@ -7,15 +7,32 @@ modelos generativos distintos — para reconstruir los 28 años anteriores de
 los que solo tenemos precio de cierre diario (Norgate).**
 
 **Resultado (§6-7, con los 6 notebooks ejecutados end-to-end sobre datos
-reales): sí ayuda, poco, y da igual con qué generador.** Añadir ~28 años
-de historia reconstruida sintéticamente sube la precisión direccional del
-predictor de ~50-51% a ~52-53% y baja el MAE ~0.3-0.5%. Pero el hallazgo
-más sólido es el negativo: tras **7.426 evaluaciones** optimizando la
-fidelidad distribucional de los generadores, un experimento controlado
-(§6.3) muestra que **esa fidelidad no predice la utilidad real** — variando
-la calidad del generador un factor 2.266×, el rendimiento final varía un
-0.64%. El GAN mejor optimizado no bate a añadir ruido gaussiano a datos
-reales.
+reales): un negativo, pero controlado — que es lo que le da valor.**
+
+1. **Da igual qué generador se use.** Tras **7.428 evaluaciones**
+   optimizando la fidelidad distribucional, un experimento controlado
+   (§6.3) muestra que **esa fidelidad no predice la utilidad**: variando la
+   calidad del generador un factor 2.266×, el rendimiento final varía un
+   0.64%. El GAN mejor optimizado no bate a añadir ruido gaussiano.
+2. **El ranking entre generadores es ruido de inicialización** (§6.6).
+   Repitiendo la rejilla entera dos veces, la correlación de rangos entre
+   ejecuciones fue **−0.10**, con saltos de hasta 6.36 puntos en la misma
+   configuración. Aquí no hay un "generador ganador" que declarar.
+3. **La causa raíz se encontró, se arregló y no cambió nada** (§6.8). El
+   backfill destruía el clustering de volatilidad (información mutua 0.000
+   vs 0.304 real); v2 lo recupera casi entero (0.075 → 0.593) y el MAE se
+   mueve 5·10⁻⁷, dentro del ruido de semilla.
+4. **El cuello de botella es el predictor, no el dato sintético** (§6.9).
+   En un target donde la señal es demostrable (volatilidad: HAR-RV logra R²
+   fuera de muestra de +0.21), **ninguna de las 42 redes probadas se
+   acerca** — todas pierden contra un modelo lineal de tres coeficientes
+   de 2009, con Diebold-Mariano p<0.05.
+
+Por eso este trabajo **no afirma "los datos sintéticos no ayudan"**: afirma
+que no ayudan a *este* predictor, que no aprende ni una señal que sí existe.
+Separar ambas cosas exige antes un predictor que demuestre que aprende — y
+ese control, que casi nunca se hace, es la aportación metodológica principal
+del trabajo.
 
 ## 1. El problema financiero
 
@@ -303,7 +320,7 @@ están citadas literalmente de `reports/tables/` y `reports/figures/`.
   sintética justo antes de 2024 es ~1.24-1.28× el nivel real justo
   después — sin salto artificial.
 
-### 6.2 Búsqueda de hiperparámetros de los generadores (7.426 evaluaciones)
+### 6.2 Búsqueda de hiperparámetros de los generadores (7.428 evaluaciones)
 
 Los generadores no se dejaron con los hiperparámetros de clase: se hizo una
 búsqueda aleatoria paralelizada sobre **arquitectura e hiperparámetros**,
@@ -389,48 +406,239 @@ memorización pura (copiar datos reales) y no generación.
 
 ### 6.4 El predictor del día siguiente: ¿ayudan los sintéticos?
 
-**Arquitectura ganadora** (`04_comparacion_arquitecturas.csv`, entrenada
-SOLO con la ventana real de ~1 año, con `EarlyStopping` de convergencia
-estricta — ver §4): **`cnn_3bloques`** — exactamente `cnn_model_2` de
-`Taller_GANs.ipynb`, la arquitectura con la que la propia clase compara sus
-generadores. Gana en MAE (0.011789) **y** en precisión direccional (0.515,
-la mejor de las 7 arquitecturas comparadas).
+**Protocolo de selección** (`04_comparacion_arquitecturas.csv`, entrenando
+SOLO con la ventana real disponible): la arquitectura se elige por el error
+en **validación** (`val_mae`), nunca en test — el test se reserva íntegro
+para la comparación de generadores. Y no por el mínimo, sino por la **regla
+del un error estándar** (`tu.elegir_por_una_ee`): entre las que caen dentro
+de 1 e.e. de la mejor se toma la más simple.
 
-**Rejilla final** (`04_resultados_rejilla_profundidad.csv`,
-`05_tabla_generador_final.csv`), test MAE / precisión direccional con
-`+28` años de historia sintética añadida vs. solo la ventana real:
+Aplicar esa regla aquí no es un tecnicismo, porque los números dicen algo
+incómodo:
 
-| Generador | MAE (+28 años) | Δ MAE vs. solo reales | Precisión direccional |
+| | val_mae | e.e. | nº parámetros | test mae |
+|---|---|---|---|---|
+| rnn_2capas | 0.011485 | 0.000756 | 143.681 | 0.011956 |
+| **rnn_1capa** ← elegida | 0.011518 | 0.000764 | **38.465** | 0.011867 |
+| cnn_3bloques | 0.011563 | 0.000754 | 150.273 | 0.011811 |
+| cnn_1bloque | 0.011594 | 0.000744 | 197.889 | 0.011995 |
+| dense | 0.011813 | 0.000747 | 394.009 | 0.012074 |
+
+**El error estándar (0.00075) es el doble del rango completo entre las
+cinco redes** (0.011485 → 0.011813 = 0.00033). Las cinco caen dentro de
+1 e.e. de la mejor: con 126 días de validación **no es que se elija bien la
+arquitectura, es que no se puede elegir**. Quedarse con el mínimo sería
+elegir la que mejor encaja con el ruido de ese corte — y además la más
+cara. La regla de 1 e.e. selecciona `rnn_1capa`, 4× más pequeña que la del
+mínimo.
+
+El e.e. se calcula con el **día** como unidad de observación, no la
+predicción individual: los 25 bancos de una misma fecha comparten un factor
+sectorial, así que dividir por √(25·n_días) exageraría la precisión unas 5
+veces.
+
+**Rejilla por años de backfill** (`04_resultados_rejilla_profundidad.csv`),
+test MAE / precisión direccional con `+28` años de historia sintética:
+
+| Generador | test MAE | Precisión direccional |
+|---|---|---|
+| referencia `synth_years=0` (n=211) | 0.011906 | 50.4% |
+| RBIG | **0.011745** | **52.9%** |
+| GAN | 0.011842 | 51.1% |
+| Ruido | 0.011856 | 51.9% |
+| Gaussiana | 0.011867 | 49.5% |
+
+**Esta tabla no admite la lectura "gana RBIG"** — ver §6.6. En la ejecución
+anterior el mismo puesto lo ocupaba otro generador. Se incluye porque el
+enunciado la pide, no porque ordene nada.
+
+Hay además un matiz de la propia referencia que conviene explicitar: con
+`synth_years=0` quedan 211 ventanas, de las cuales un **28% contiene algún
+día sintético** en su entrada. No es un cero limpio, porque una ventana de
+60 días que cruza la frontera real/sintética arrastra días sintéticos
+aunque su último día sea real. El cero limpio lo da la rejilla por
+porcentaje (§6.5).
+
+### 6.5 El eje que pide el enunciado: porcentaje de datos sintéticos
+
+El paso 3 pide "datasets que tengan distinto **porcentaje** de datos
+sintéticos y reales" y el paso 5 ver "cómo meter más o menos datos
+sintéticos modifica el comportamiento". La rejilla por años es la rejilla
+natural del problema financiero, pero en porcentaje se amontona entre el
+92% y el 98%: no deja ver la forma de la curva. `PCT_SYNTH_GRID` barre el
+eje completo (`train_utils.slice_by_pct`), manteniendo todas las ventanas
+reales y añadiendo las sintéticas más recientes hasta la proporción pedida,
+en bloque temporal continuo.
+
+Media de los 4 generadores en cada nivel (`05_tabla_porcentaje_sintetico.csv`):
+
+| % sintético | n_train | acierto | ±e.e. | vs. referencia |
+|---|---|---|---|---|
+| **0% (real puro)** | 152 | **50.1%** | — | — |
+| 25% | 203 | 51.92% | 0.38 | +1.82 |
+| 50% | 304 | 51.72% | 0.29 | +1.62 |
+| 75% | 608 | 51.41% | 0.14 | +1.31 |
+| **90%** | 1.520 | **53.54%** | 0.91 | **+3.44** |
+| 100% (sin ancla real) | 6.885 | 52.27% | 0.19 | +2.17 |
+
+Aquí el 0% **sí** es un cero limpio: solo ventanas íntegramente reales. Y da
+**50.1%**, una moneda al aire — que es la referencia honesta contra la que
+medir.
+
+Todos los niveles con sintéticos la superan, con **pico en el 90%** y caída
+al pasar al 100%, donde ya no queda ningún dato real de ancla. Ese mismo
+patrón —máximo antes del 100%, caída al quitar el ancla real— aparece por
+separado en el experimento de volatilidad de v2 (§6.9), y es lo que le da
+crédito: dos experimentos independientes, no un p-valor.
+
+Tendencia sobre los 20 puntos con sintéticos: **+1.26 puntos de acierto por
+cada 100% de sintético**, Spearman ρ=+0.393 (p=0.087). Sugerente, no
+concluyente — y el 75% rompe la monotonía.
+
+### 6.6 Cuánto de todo esto es señal: el suelo de ruido
+
+**El ranking entre generadores no se reproduce.** Se ejecutó la rejilla
+completa dos veces —mismo código, mismos datos, misma arquitectura— y se
+comparó:
+
+| | |
+|---|---|
+| Correlación de rangos (Spearman) entre las dos ejecuciones | **−0.10** |
+| Cambio absoluto medio en acierto direccional | 2.36 puntos |
+| Cambio máximo en una misma configuración | **6.36 puntos** |
+
+Casos concretos: `noise` a 7 años pasó de 49.6% a 55.5% (de los peores a
+el mejor); `noise` a 28 años, de 52.5% a 46.1%. El rango entre generadores
+dentro de una misma profundidad es de 1.8 a 4.5 puntos — **menor que el
+ruido entre ejecuciones**.
+
+Con una semilla por configuración, comparar generadores mide la
+inicialización, no el generador. Por eso §6.5 promedia entre los 4 en vez
+de proclamar un ganador, y por eso la tabla de §6.4 se presenta con la
+advertencia explícita.
+
+**Corolario metodológico**: el arreglo correcto es promediar varias
+semillas por configuración. No se hizo por coste de cómputo, y se declara
+como limitación (§10) en vez de disimularse.
+
+### 6.7 Separación temporal: qué está limpio y qué no
+
+Auditoría explícita del pipeline, porque es donde se cometen los errores
+que invalidan un trabajo entero:
+
+| | |
+|---|---|
+| Generadores entrenados excluyendo val+test | ✅ (`nb02`, `holdout_mask`) |
+| Backfill causal (usa el retorno real **contemporáneo**, nunca futuro) | ✅ |
+| Ventanas de **test** que solapan con train | ✅ **0 de 122** |
+| Separación efectiva train→test | 127 días de mercado (ventana X = 60) |
+| Purga train→validación | ✅ 61 días naturales (`embargo_days`) |
+| Arquitectura elegida en validación, no en test | ✅ |
+| Retornos con `close_totalreturn` (dividendos reinvertidos) | ✅ |
+| Garman-Klass sobre OHLC **sin ajustar** | ✅ correcto: H/L y C/O son ratios intradía, el factor de ajuste se cancela |
+| Sesgo de supervivencia | ⚠️ reconocido, ver §5 |
+
+Dos de estas casillas **estaban mal y se corrigieron** durante el
+desarrollo, y merece la pena decirlo porque son errores típicos:
+
+1. **La arquitectura se elegía por el MAE de test.** `run_architecture_comparison`
+   solo evaluaba en test, y el notebook hacía `idxmin()` sobre esa columna
+   — mientras la documentación afirmaba tres veces que se elegía por
+   validación. Como la ganadora se propaga a las dos rejillas, el sesgo
+   habría contaminado todos los resultados.
+2. **No había purga entre train y validación.** 59 de las 126 ventanas de
+   validación (47%) solapaban con el tramo de entrenamiento, lo que hacía
+   optimistas el early stopping y la selección. La purga estaba
+   implementada (`split_fold`) pero solo se usaba en la búsqueda
+   walk-forward, no en las rejillas que producen los resultados
+   reportados. Cuesta un 40% de las muestras de entrenamiento en la
+   configuración más pequeña (252 → 152 ventanas); se paga.
+
+### 6.8 v2: se arregla la causa raíz… y sigue sin cambiar nada
+
+Carpeta `v2_persistencia_temporal/` (extensión; no modifica v1).
+
+Investigando *por qué* la fidelidad no predecía la utilidad apareció una
+causa concreta: `src/backfill.py` muestrea la volatilidad de cada día de
+forma **independiente**, condicionando solo al retorno de ese mismo día.
+Medido sobre el tramo sintético:
+
+| persistencia (lag 1) | REAL | sintética v1 |
+|---|---|---|
+| Pearson | +0.631 | +0.075 |
+| Información mutua (no lineal) | +0.304 | **+0.000** |
+
+La serie sintética **no tiene clustering de volatilidad** — el hecho
+estilizado más robusto de las series financieras. Información mutua
+exactamente cero. Por bien que un generador modele la distribución
+conjunta *de un día*, el backfill destruía la dinámica temporal al
+muestrear cada día por separado: los generadores competían en algo que el
+backfill luego borraba.
+
+`backfill_persistente.py` lo arregla muestreando en secuencia y
+condicionando también a `RV_{t-1}`. **La persistencia pasa de 0.075 a
+0.593** (real: 0.639) y la información mutua de 0.000 a 0.244.
+
+Y aun así, aguas abajo (`v2_comparativa_variantes.csv`):
+
+| variante | persistencia | test MAE | ± ruido de semilla |
 |---|---|---|---|
-| solo reales (`synth_years=0`) | 0.011789 | — | 51.4% |
-| **Ruido** | **0.011750** | **+0.33%** | **53.0%** |
-| GAN | 0.011762 | +0.23% | 52.0% |
-| Gaussiana | 0.011785 | +0.04% | 50.0% |
-| RBIG | 0.011959 | **−1.4%** (empeora) | 45.5% |
+| sin canal de volatilidad | — | 0.0118186 | 5.5e-06 |
+| v1, sin memoria | 0.075 | 0.0118230 | 5.4e-07 |
+| v2, con memoria | 0.593 | 0.0118225 | 7.0e-06 |
+| OHLC real (Garman-Klass) | 0.731 | 0.0118185 | 2.9e-06 |
 
-**Lectura**: 3 de los 4 generadores igualan o mejoran ligeramente al modelo
-entrenado solo con datos reales — el Ruido (el modelo "simple" obligatorio
-del enunciado) gana por MAE y precisión direccional a `+28` años, y el GAN
-lo iguala en el punto intermedio (`synth_years=14`, 52.9% de precisión
-direccional, la mejor de toda la rejilla). La mejora en MAE es modesta
-(~0.3%: predecir el signo/magnitud del retorno diario de un banco líquido
-es un problema cercano a la eficiencia de mercado), pero la mejora en
-**precisión direccional es consistente y más fácil de interpretar**: pasar
-de 51.4% (solo reales) a ~53% con el generador adecuado es una ventaja
-real, aunque pequeña, sobre lanzar una moneda.
+El MAE se mueve 5·10⁻⁷ — **del mismo orden que el ruido de semilla**. Y la
+variante **sin ningún canal de volatilidad** empata con la volatilidad
+**real** de 30 años. Ni el sintético malo, ni el bueno, ni el dato real
+mejoran sobre no tener el canal.
 
-**RBIG es la excepción, y es una excepción explicable, no ruido.** Es el
-único generador cuyo rendimiento se **degrada por debajo del baseline**
-según se añade profundidad, y también el que muestra la relación menos
-favorable entre calidad de reconstrucción de la distribución conjunta
-(notebook 02) y rendimiento final (`05_calidad_generador_vs_mae.png`): a
-pesar de tener mejor distancia de Frobenius que el GAN, da peor MAE final
-que los otros 3. Es exactamente el tipo de hallazgo que pide el paso 5 del
-enunciado ("comparar entre los distintos tipos de modelos generativos
-usados") — la calidad del generador importa, y no toda métrica de
-fidelidad distribucional predice igual de bien la utilidad río abajo.
+### 6.9 El control que faltaba: ¿es el dato, o es el modelo?
 
-### 6.5 Cómo reproducir estos números
+Todo lo anterior tiene un agujero: no distingue entre *"los sintéticos no
+aportan"* y *"el predictor no funciona"*. Sin descartar lo segundo, lo
+primero no es defendible.
+
+`experimento_target_volatilidad.py` lo cierra cambiando **una sola cosa**,
+el target: de retorno del día siguiente a **volatilidad** del día
+siguiente, que sí es predecible (es lo que significa el clustering). El
+target sale de Garman-Klass sobre OHLC diario **real** de los 30 años — no
+de la realizada de 5 min, que obligaría a poner sintético como target y
+estaríamos midiendo si el sintético predice al sintético.
+
+Con el rigor que el problema exige: **log-volatilidad** (aproximadamente
+lognormal, Andersen et al. 2003), **HAR-RV** (Corsi 2009) como benchmark en
+vez del paseo aleatorio, **QLIKE** (Patton 2011) como pérdida robusta al
+ruido del proxy, regresión de **Mincer-Zarnowitz** para calibración, y
+**Diebold-Mariano** con errores HAC de Newey-West sobre el diferencial de
+pérdida promediado por día.
+
+| | QLIKE | corr | pendiente MZ |
+|---|---|---|---|
+| **HAR-RV** (3 coeficientes, 2009) | **0.3448** | **0.465** | **0.863** |
+| mejor red (de 42 configuraciones) | 0.3714 | 0.045 | 0.183 |
+| baseline constante | 0.4410 | 0.065 | 0.280 |
+| baseline ingenuo | 0.5223 | 0.417 | 0.418 |
+
+**Ninguna de las 42 redes bate a HAR**: todas dan Diebold-Mariano positivo
+con p<0.05. Y el target **sí** es predecible — HAR saca R² fuera de muestra
+de **+0.21** con calibración 0.863.
+
+**Ablación de arquitectura.** La búsqueda de hiperparámetros había
+seleccionado `global_pool=True`, que sustituye el `Flatten` por un
+`GlobalAveragePooling1D`: ese pooling **promedia sobre el eje temporal**, de
+modo que la red no puede distinguir si un valor viene de ayer o de hace 60
+días. Para predecir la volatilidad de mañana —cuyo predictor dominante es
+la de ayer— es incapacitante. Corriendo las dos variantes, quitar el
+pooling casi triplica la correlación (0.041 → 0.142 en el nivel del 75%),
+así que el orden temporal importaba… pero 0.142 sigue siendo la cuarta
+parte del 0.465 de HAR. **El pooling era un problema, no *el* problema.**
+
+Que la búsqueda lo eligiera es coherente: optimizaba sobre el target de
+retornos, donde no hay señal, y ahí una arquitectura incapaz de aprender no
+pierde nada frente a las demás.
+
+### 6.10 Cómo reproducir estos números
 
 Todo lo anterior sale de ejecutar, en orden, `00` → `05` con
 `jupyter nbconvert --to notebook --execute --inplace` (o abriendo cada
@@ -452,44 +660,82 @@ python scripts/experimento_espectro_gan.py                         # fidelidad v
 
 ## 7. Conclusiones
 
-**1. Sí, los datos sintéticos ayudan — poco, pero de forma consistente.**
-Entrenar con ~28 años de historia reconstruida sintéticamente mejora al
-modelo entrenado solo con el año real disponible: el MAE baja ~0.3-0.5% y
-la precisión direccional sube de ~50-51% a ~52-53%. La mejora en MAE es
-modesta y esperable (predecir el retorno diario de un banco líquido está
-cerca del límite de eficiencia de mercado), pero la de precisión
-direccional es más interpretable: pasar de "moneda al aire" a ~53% es una
-ventaja real, aunque pequeña.
+**1. Qué generador se use no importa — y es el hallazgo más sólido.**
+Variando la fidelidad distribucional del generador un factor **2.266×**, el
+rendimiento final varía un **0.64%** (§6.3). El GAN con mejor fidelidad de
+los 725 evaluados da el peor resultado aguas abajo. Lo que aporta valor es
+tener más contexto histórico con el que entrenar, no la sofisticación del
+modelo generativo: un GAN cuidadosamente optimizado no bate a añadir ruido
+gaussiano a datos reales.
 
-**2. Qué generador se use apenas importa — y ese es el hallazgo más
-sólido.** Es el resultado contraintuitivo de §6.3: variando la fidelidad
-distribucional del generador un factor 2.266×, el rendimiento final varía
-un 0.64%. Lo que aporta valor es **tener más contexto histórico con el que
-entrenar**, no la sofisticación del modelo generativo. Un GAN cuidadosamente
-optimizado no bate a añadir ruido gaussiano a datos reales.
+**2. El ranking entre generadores no es señal: es ruido de
+inicialización.** Es la conclusión que más nos costó aceptar, porque
+invalida cualquier "ganador". Repitiendo la rejilla completa dos veces —
+mismo código, mismos datos, misma arquitectura— la correlación de rangos
+entre ambas ejecuciones fue **−0.10**, con cambios de hasta **6.36 puntos**
+de precisión direccional en la misma configuración (§6.6). Con una semilla
+por configuración, comparar generadores mide la semilla, no el generador.
+Cualquier lectura de tipo "el generador X es el mejor" en este trabajo
+sería un artefacto.
 
-**3. La explicación es estructural, no accidental.** La volatilidad
-sintética se deriva, por construcción, del retorno real conocido de cada
-día. Por muy bien que se imite la distribución conjunta, esa feature
-aporta poca información marginal más allá del canal de retorno que el
-modelo ya tiene. Es el límite del método de *conditional matching*, y
-conviene decirlo con claridad en vez de vender la mejora como algo que no
-es.
-
-**4. Optimizar la métrica equivocada es un riesgo real, no teórico.** Se
-gastaron 7.426 evaluaciones optimizando fidelidad distribucional, y esa
-métrica resultó no predecir la utilidad. El caso extremo es el generador
-de Ruido: obtiene MMD ≈ 0 (fidelidad perfecta) simplemente **copiando**
+**3. Optimizar la métrica equivocada es un riesgo real, no teórico.** Se
+gastaron **7.428** evaluaciones optimizando fidelidad distribucional, y esa
+métrica resultó no predecir la utilidad. El caso extremo es el generador de
+Ruido: obtiene MMD ≈ 0 (fidelidad perfecta) simplemente **copiando**
 muestras reales — memorización, no generación. Sin el experimento de §6.3
 se habría elegido el generador por el criterio incorrecto sin saberlo.
 
-**5. Lo que sí mejoró de forma medible fue el proceso, no el resultado.**
-La búsqueda de hiperparámetros arregló problemas reales — el sobreajuste
-severo del predictor (curvas de validación divergentes), el colapso de
-modo del GAN (Frobenius 1.27 → 0.36), la Gaussiana ajustada a la cópula
-(15× mejor) — pero ninguna de esas mejoras se tradujo en un predictor
-mucho mejor. Es una lección honesta sobre dónde están los límites en este
-problema: no en el modelado generativo, sino en la señal disponible.
+**4. La causa raíz se encontró y se arregló, y no sirvió de nada.** El
+backfill de v1 destruía el clustering de volatilidad (información mutua
+0.000 frente a 0.304 real). El muestreo secuencial de v2 lo recupera casi
+entero (0.075 → 0.593, real 0.639) y el MAE se mueve **5·10⁻⁷**, dentro del
+ruido de semilla. Más aún: la variante **sin canal de volatilidad** empata
+con la volatilidad **real** de 30 años (§6.8). Recuperar el realismo era
+necesario para que el sintético fuera creíble, pero no suficiente para que
+fuera útil.
+
+**5. El cuello de botella es el predictor, no el dato sintético — y esto
+acota lo que el resto del trabajo puede afirmar.** Cambiando a un target
+donde la señal es demostrable (volatilidad: HAR-RV alcanza R² fuera de
+muestra de **+0.21**), **ninguna de las 42 configuraciones de red se le
+acerca**; todas pierden contra HAR con Diebold-Mariano p<0.05 (§6.9). Un
+modelo lineal de tres coeficientes de 2009 bate a todo el deep learning que
+probamos.
+
+La consecuencia es incómoda pero es la honesta: **no podemos concluir "los
+datos sintéticos no ayudan"**. Lo que hemos demostrado es que no ayudan a
+*este* predictor, que es incapaz de extraer siquiera una señal que sí
+existe. Distinguir ambas cosas requeriría un predictor que primero
+demuestre que aprende.
+
+**6. Lo que sí se mueve al variar el porcentaje.** Con la referencia
+limpia —152 ventanas íntegramente reales, **50.1%**, una moneda al aire—
+todos los niveles con sintéticos la superan, con pico en el **90%
+(53.5%, +3.4 puntos)** y caída al llegar al 100%, donde ya no queda ningún
+dato real de ancla (§6.5). El mismo patrón, máximo antes del 100% y caída
+al quitar el ancla, aparece por separado en el control de volatilidad
+(§6.9). Que dos experimentos independientes coincidan es lo que sostiene
+esta lectura; el p-valor (0.087) por sí solo no lo haría.
+
+**7. Auditoría de fugas: dos errores encontrados y corregidos.** La
+arquitectura se estaba eligiendo por el MAE de **test** (y la ganadora se
+propaga a todas las rejillas), y no había **purga** entre entrenamiento y
+validación — 47% de las ventanas de validación solapaban con el train
+(§6.7). Ambos están corregidos y verificados: 0 de 122 ventanas de test
+solapan con entrenamiento, y hay 61 días naturales de separación
+train→validación. Se documentan en vez de borrarse porque son los errores
+que más a menudo invalidan un trabajo de este tipo sin que nadie lo note.
+
+**8. La lección metodológica.** Antes de preguntarse *"¿mejora mi modelo
+con datos sintéticos?"* hay que verificar tres cosas que este trabajo
+aprendió por las malas: que el modelo **puede aprender la tarea** (un
+control positivo con un benchmark que lo demuestre); que las diferencias
+comparadas **superan el ruido de la propia ejecución** (repetir con varias
+semillas); y que **el protocolo hace lo que la documentación dice** — aquí
+afirmaba tres veces que seleccionaba en validación mientras el código
+miraba el test. Sin lo primero, un resultado nulo no distingue el dato del
+modelo. Sin lo segundo, se declara un ganador que la siguiente ejecución
+desmiente. Sin lo tercero, nada de lo anterior importa.
 
 ## 8. Estructura del repositorio
 

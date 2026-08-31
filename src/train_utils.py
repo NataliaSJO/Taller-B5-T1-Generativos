@@ -77,6 +77,37 @@ def evaluate_predictor_per_ticker(
     return pd.DataFrame(rows).set_index("ticker")
 
 
+def ventana_contiene_sintetico(
+    is_synthetic_ultimo_dia: np.ndarray,
+    window_x: int = config.WINDOW_X_DAYS,
+) -> np.ndarray:
+    """Convierte "el ULTIMO dia de la ventana es sintetico" en "ALGUN dia
+    de la ventana es sintetico", que es lo que de verdad hace falta.
+
+    El notebook 03 guarda `is_synthetic = idx < cutoff`, donde `idx` es la
+    fecha del ULTIMO dia de cada ventana X. Eso marca como reales las
+    ventanas que cruzan la frontera real/sintetica aunque arrastren hasta
+    `window_x - 1` dias sinteticos en su entrada: en este dataset son 59
+    ventanas mal etiquetadas.
+
+    El sesgo iba en la direccion prudente (subestimaba el contenido
+    sintetico, no lo inflaba), pero hacia que `pct_synth` no significara lo
+    que decia su documentacion — y `slice_by_pct` construye las
+    proporciones del enunciado justamente con esa mascara.
+
+    Como `idx[j]` es el ultimo dia de la ventana j, el PRIMER dia de esa
+    ventana es `idx[j - window_x + 1]`; basta con desplazar la mascara.
+    Las primeras `window_x - 1` ventanas empiezan antes de `idx[0]`, asi
+    que heredan su valor.
+    """
+    m = np.asarray(is_synthetic_ultimo_dia, dtype=bool)
+    n, w = len(m), int(window_x)
+    if n == 0 or w <= 1:
+        return m.copy()
+    relleno = np.full(min(w - 1, n), m[0], dtype=bool)
+    return np.concatenate([relleno, m[: max(n - w + 1, 0)]])[:n]
+
+
 def slice_by_depth(
     X: np.ndarray,
     Y: np.ndarray,
@@ -85,6 +116,7 @@ def slice_by_depth(
     train_end: str,
     synth_anchor: str,
     is_synthetic: np.ndarray | None = None,
+    embargo_days: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, pd.DatetimeIndex, float]:
     """Recorta (X, Y) a las ventanas cuya fecha cae en
     [synth_anchor - synth_years, train_end).
@@ -105,11 +137,28 @@ def slice_by_depth(
     config.SYNTH_DEPTH_YEARS_GRID.)
 
     Si se pasa `is_synthetic` (mascara booleana alineada con `idx`, True si
-    la fila usa volatilidad sintetica en algun dia de su ventana X), tambien
-    devuelve `pct_synth`, la fraccion REAL de filas sinteticas del recorte
-    (no una aproximacion por calendario).
+    la fila usa volatilidad sintetica en algun dia de su ventana X — ver
+    `ventana_contiene_sintetico`), tambien devuelve `pct_synth`, la fraccion
+    REAL de filas sinteticas del recorte (no una aproximacion por
+    calendario).
+
+    *** PURGA (`embargo_days`) ***
+    El entrenamiento no llega hasta `train_end`, sino hasta
+    `train_end - embargo_days` dias naturales. Sin esto, las ultimas
+    ventanas de entrenamiento comparten casi toda su X con las primeras
+    ventanas de validacion (cada muestra arrastra `WINDOW_X_DAYS` dias de
+    historia), lo que no es look-ahead pero si crea dependencia
+    estadistica entre train y validacion y hace la validacion OPTIMISTA
+    — y con ella el early stopping y la eleccion de arquitectura.
+    Medido en este dataset: sin purga, 59 de las 126 ventanas de
+    validacion (47%) solapaban con el tramo de entrenamiento.
+
+    Por defecto es 0 para no cambiar el comportamiento de `split_fold`,
+    que ya resta el embargo por su cuenta antes de llamar aqui (si se
+    aplicara en los dos sitios se restaria dos veces). Las rejillas
+    (`run_depth_grid`, `run_pct_grid`) lo pasan explicitamente.
     """
-    end = pd.Timestamp(train_end)
+    end = pd.Timestamp(train_end) - pd.Timedelta(days=embargo_days)
     start = pd.Timestamp(synth_anchor) - pd.Timedelta(days=synth_years * 365.25)
     mask = (idx >= start) & (idx < end)
     pct_synth = float(is_synthetic[mask].mean()) if is_synthetic is not None and mask.any() else 0.0
@@ -123,6 +172,7 @@ def slice_by_pct(
     pct_synth_target: float,
     train_end: str,
     is_synthetic: np.ndarray,
+    embargo_days: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, pd.DatetimeIndex, float]:
     """Recorta (X, Y) a un dataset con la PROPORCION pedida de filas
     sinteticas, manteniendo TODAS las reales disponibles.
@@ -147,8 +197,11 @@ def slice_by_pct(
     Con `n_r` filas reales, para una fraccion objetivo `p` hacen falta
     `n_s = n_r * p / (1 - p)` sinteticas; `p = 1.0` significa entrenar
     solo con sinteticas (todas las disponibles).
+
+    `embargo_days`: purga entre el final del entrenamiento y el inicio de
+    la validacion — ver `slice_by_depth`, mismo motivo y mismo valor.
     """
-    end = pd.Timestamp(train_end)
+    end = pd.Timestamp(train_end) - pd.Timedelta(days=embargo_days)
     en_rango = idx < end
     is_synthetic = np.asarray(is_synthetic, dtype=bool)
 
@@ -285,6 +338,24 @@ def run_architecture_comparison(
     el mismo train/val/test y devuelve una tabla comparativa + historiales de
     loss (para elegir la arquitectura del paso 4 del enunciado).
 
+    *** COLUMNAS DE VALIDACION Y DE TEST, Y CUAL USAR ***
+    La tabla trae las metricas por DUPLICADO:
+      - `val_mae`, `val_mse`, `val_directional_accuracy` -> medidas en
+        VALIDACION. Son las unicas que se pueden usar para ELEGIR la
+        arquitectura.
+      - `mae`, `mse`, `directional_accuracy` -> medidas en TEST. Solo para
+        REPORTAR, una vez la eleccion ya esta hecha.
+
+    Elegir por la columna de test seria seleccionar sobre el conjunto de
+    evaluacion: con 7 candidatas se acabaria escogiendo la que mejor encaja
+    con el ruido concreto de ese test, y las metricas de la ganadora
+    quedarian sesgadas a la baja. Ademas la arquitectura elegida se propaga
+    a las rejillas posteriores, asi que el sesgo contaminaria TODOS los
+    numeros del trabajo, no solo esta tabla.
+
+    (Usar `X_val` para el early stopping, como se hace abajo, es distinto y
+    si es correcto: no elige entre modelos, solo decide cuando parar uno.)
+
     `early_stopping_patience`: nº de epochs sin mejora en val_loss antes de
     parar (y quedarse con los mejores pesos vistos, no los ultimos) — mas
     rapido y menos sobreajuste que forzar siempre `epochs` fijas. `None` lo
@@ -304,19 +375,66 @@ def run_architecture_comparison(
                 callbacks=_make_early_stopping(early_stopping_patience),
             )
             histories[name] = hist.history
-            X_test_eval = X_test
+            X_val_eval, X_test_eval = X_val, X_test
         else:
             # sklearn (LinearRegression) o BaselinePredictor: sin historial
             # de epochs; LinearRegression necesita la ventana X aplanada.
             needs_flat = type(model).__name__ == "LinearRegression"
             X_fit = X_train.reshape(X_train.shape[0], -1) if needs_flat else X_train
             model.fit(X_fit, Y_train)
+            X_val_eval = X_val.reshape(X_val.shape[0], -1) if needs_flat else X_val
             X_test_eval = X_test.reshape(X_test.shape[0], -1) if needs_flat else X_test
 
-        metrics = evaluate_predictor(model, X_test_eval, Y_test)
-        rows.append({"model": name, "fit_seconds": time.time() - t0, **metrics})
+        val_metrics = evaluate_predictor(model, X_val_eval, Y_val)
+        test_metrics = evaluate_predictor(model, X_test_eval, Y_test)
+
+        # Error estandar del val_mae, con el DIA como unidad de observacion
+        # (no la prediccion individual): los 25 bancos de una misma fecha
+        # comparten un factor sectorial y no son independientes, asi que
+        # dividir por sqrt(25*n_dias) exageraria la precision unas 5 veces.
+        # Este e.e. es lo que permite aplicar la regla de 1 e.e. al elegir
+        # arquitectura, en vez de quedarse con el minimo a secas.
+        Y_pred_val = np.asarray(model.predict(X_val_eval)).reshape(Y_val.shape)
+        err_por_dia = np.abs(Y_val - Y_pred_val).mean(axis=1)
+        val_mae_se = float(err_por_dia.std(ddof=1) / np.sqrt(len(err_por_dia)))
+
+        rows.append({
+            "model": name, "fit_seconds": time.time() - t0,
+            "n_params": int(model.count_params()) if is_keras else np.nan,
+            **{f"val_{k}": v for k, v in val_metrics.items()},
+            "val_mae_se": val_mae_se,
+            **test_metrics,
+        })
 
     return pd.DataFrame(rows).set_index("model"), histories
+
+
+def elegir_por_una_ee(
+    tabla: pd.DataFrame,
+    col_metrica: str = "val_mae",
+    col_ee: str = "val_mae_se",
+    col_complejidad: str = "n_params",
+) -> str:
+    """Regla del UN ERROR ESTANDAR: entre las arquitecturas cuyo error de
+    validacion cae dentro de 1 e.e. del mejor, se elige la MAS SIMPLE (menos
+    parametros), no la del minimo.
+
+    Por que no el minimo: en este trabajo la diferencia entre las mejores
+    arquitecturas es del orden de 1e-5 de MAE, mientras que el propio ruido
+    de inicializacion mueve el resultado varias milesimas (README §6.6).
+    Quedarse con el minimo es elegir la que mejor encaja con el ruido de ESE
+    corte concreto, y ademas suele ser la mas cara: entre `rnn_2capas` y
+    `cnn_3bloques` hay 3.3x de coste de computo por 8 millonesimas de MAE.
+
+    Es la misma regla que ya usa `scripts/analizar_hpsearch.py` para los
+    generadores, aplicada aqui por coherencia (Hastie, Tibshirani &
+    Friedman, "The Elements of Statistical Learning", §7.10)."""
+    mejor = tabla[col_metrica].idxmin()
+    umbral = tabla.loc[mejor, col_metrica] + tabla.loc[mejor, col_ee]
+    candidatas = tabla[tabla[col_metrica] <= umbral]
+    if col_complejidad in candidatas and candidatas[col_complejidad].notna().any():
+        return str(candidatas[col_complejidad].idxmin())
+    return str(mejor)
 
 
 def run_depth_grid(
@@ -334,6 +452,7 @@ def run_depth_grid(
     verbose: int = 0,
     ticker_names: list[str] | None = None,
     early_stopping_patience: int | None = 100,
+    embargo_days: int = config.WINDOW_X_DAYS,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """Para cada generador de `datasets_by_generator` (nombre -> (X, Y, idx,
     is_synthetic) con el historico COMPLETO de 30 anios construido con el
@@ -376,7 +495,8 @@ def run_depth_grid(
         )
         for gen_name, (X_full, Y_full, idx_full, is_synth_full) in generators_this_depth.items():
             X_tr, Y_tr, _, pct_synth = slice_by_depth(
-                X_full, Y_full, idx_full, synth_years, train_end, synth_anchor, is_synth_full
+                X_full, Y_full, idx_full, synth_years, train_end, synth_anchor,
+                is_synth_full, embargo_days=embargo_days,
             )
             model = build_model_fn()
             hist = model.fit(
@@ -414,6 +534,7 @@ def run_pct_grid(
     verbose: int = 0,
     ticker_names: list[str] | None = None,
     early_stopping_patience: int | None = 100,
+    embargo_days: int = config.WINDOW_X_DAYS,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """Igual que `run_depth_grid` pero recortando por PORCENTAJE de filas
     sinteticas (`slice_by_pct`) en vez de por anios de profundidad.
@@ -443,7 +564,8 @@ def run_pct_grid(
         )
         for gen_name, (X_full, Y_full, idx_full, is_synth_full) in generators_this_pct.items():
             X_tr, Y_tr, _, pct_real = slice_by_pct(
-                X_full, Y_full, idx_full, pct, train_end, is_synth_full
+                X_full, Y_full, idx_full, pct, train_end, is_synth_full,
+                embargo_days=embargo_days,
             )
             model = build_model_fn()
             hist = model.fit(

@@ -93,8 +93,14 @@ for name in ["noise", "gaussian", "rbig", "gan"]:
         continue
     npz = np.load(path, allow_pickle=True)
     idx = pd.DatetimeIndex(npz["idx"])
-    datasets_by_generator[name] = (npz["X"], npz["Y"], idx, npz["is_synthetic"])
-    print(f"{name}: X {npz['X'].shape}  Y {npz['Y'].shape}")
+    # El notebook 03 guarda "el ULTIMO día de la ventana es sintético". Lo
+    # que hace falta es "ALGÚN día de la ventana lo es": una ventana que
+    # cruza la frontera arrastra hasta 59 días sintéticos en su entrada y
+    # se estaba contando como real (ver tu.ventana_contiene_sintetico).
+    is_synth = tu.ventana_contiene_sintetico(npz["is_synthetic"], config.WINDOW_X_DAYS)
+    datasets_by_generator[name] = (npz["X"], npz["Y"], idx, is_synth)
+    print(f"{name}: X {npz['X'].shape}  Y {npz['Y'].shape}  "
+          f"sintéticas {npz['is_synthetic'].mean():.4f} -> {is_synth.mean():.4f}")
 
 N_CHANNELS = datasets_by_generator[next(iter(datasets_by_generator))][0].shape[-1]  # 2 * N_PREDICTOR_TICKERS
 assert N_CHANNELS == 2 * config.N_PREDICTOR_TICKERS
@@ -157,7 +163,7 @@ arch_results, arch_histories = tu.run_architecture_comparison(
     early_stopping_patience=EARLY_STOPPING_PATIENCE,
 )
 arch_results.to_csv(config.TABLES_DIR / "04_comparacion_arquitecturas.csv")
-arch_results.sort_values("mae")
+arch_results.sort_values("val_mae")
 
 # %%
 fig = pl.plot_loss_grid(arch_histories, ncols=3)
@@ -165,20 +171,42 @@ pl.savefig(fig, "04_loss_curvas_arquitecturas")
 fig
 
 # %% [markdown]
-# Se elige la arquitectura con menor MAE en **validación** (no en test:
-# el test se reserva íntegro para la comparación de generadores del
-# siguiente paso).
+# Se elige la arquitectura con menor MAE en **validación** (`val_mae`), no
+# en test: el test se reserva íntegro para la comparación de generadores
+# del siguiente paso.
+#
+# La distinción no es cosmética. Elegir entre 7 candidatas por su error de
+# test es seleccionar sobre el conjunto de evaluación: se acabaría cogiendo
+# la que mejor encaja con el ruido concreto de ese test, y sus métricas
+# quedarían sesgadas a la baja. Y como la ganadora se propaga a las dos
+# rejillas siguientes, el sesgo contaminaría todos los resultados del
+# trabajo, no solo esta tabla. Se imprimen ambas columnas para que se vea
+# que la elección no cambia por mirar el test.
 
 # %%
-ARQUITECTURA_GANADORA = arch_results["mae"].idxmin()
-mejor_direccional = arch_results["directional_accuracy"].idxmax()
-print("Arquitectura elegida (menor MAE):", ARQUITECTURA_GANADORA)
+ARQUITECTURA_GANADORA = tu.elegir_por_una_ee(arch_results)
+mejor_direccional = arch_results["val_directional_accuracy"].idxmax()
+print("Ranking por validación (criterio de selección):")
+print(arch_results[["val_mae", "val_mae_se", "n_params", "mae"]]
+      .sort_values("val_mae").round(6))
+print()
+_min = arch_results["val_mae"].idxmin()
+_umbral = arch_results.loc[_min, "val_mae"] + arch_results.loc[_min, "val_mae_se"]
+print(f"Mínimo val_mae: '{_min}' ({arch_results.loc[_min,'val_mae']:.6f}), "
+      f"umbral 1 e.e. = {_umbral:.6f}")
+print(f"Dentro de 1 e.e.: {list(arch_results[arch_results.val_mae <= _umbral].index)}")
+print(f"-> se elige la MÁS SIMPLE de ellas: {ARQUITECTURA_GANADORA}")
+print()
+if arch_results["mae"].idxmin() != ARQUITECTURA_GANADORA:
+    print(f"[NOTA] Por test habría ganado '{arch_results['mae'].idxmin()}'. "
+          f"Se mantiene la elección por validación, que es la correcta.")
+print("Arquitectura elegida (menor val_mae):", ARQUITECTURA_GANADORA)
 if mejor_direccional != ARQUITECTURA_GANADORA:
     print(
-        f"[AVISO] '{mejor_direccional}' tiene mejor precisión direccional "
-        f"({arch_results.loc[mejor_direccional, 'directional_accuracy']:.3f} vs "
-        f"{arch_results.loc[ARQUITECTURA_GANADORA, 'directional_accuracy']:.3f}) aunque peor MAE — "
-        "vale la pena citar ambas arquitecturas en la presentación."
+        f"[AVISO] '{mejor_direccional}' tiene mejor precisión direccional en "
+        f"validación ({arch_results.loc[mejor_direccional, 'val_directional_accuracy']:.3f} vs "
+        f"{arch_results.loc[ARQUITECTURA_GANADORA, 'val_directional_accuracy']:.3f}) aunque peor "
+        "MAE — vale la pena citar ambas arquitecturas en la presentación."
     )
 
 
