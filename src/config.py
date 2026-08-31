@@ -184,6 +184,21 @@ WINDOW_Y_DAYS = 1
 # sintetico; synth_years=28 -> +28 anios de backfill sintetico.
 SYNTH_DEPTH_YEARS_GRID = [0, 7, 14, 21, 28]
 
+# Rejilla de PORCENTAJE de filas sinteticas, la que responde literalmente al
+# paso 3 del enunciado ("datasets que tengan distinto porcentaje de datos
+# sinteticos y reales") y al paso 5 ("como meter mas o menos datos sinteticos
+# modifica el comportamiento del modelo") — ver train_utils.slice_by_pct.
+#
+# Hacen falta las DOS rejillas y no son redundantes:
+#   - SYNTH_DEPTH_YEARS_GRID es la rejilla natural del PROBLEMA (cuantos anios
+#     de historia bancaria se recuperan), pero en porcentaje cae en 0% y luego
+#     87/93/95/96%: cuatro puntos amontonados arriba y el tramo 0-87% vacio.
+#   - PCT_SYNTH_GRID barre ese eje de forma uniforme, que es donde se ve de
+#     verdad si "mas sintetico" ayuda, satura o empieza a estorbar.
+# El 1.0 (entrenar SOLO con sinteticos, sin ninguna fila real) es el caso
+# limite util: mide cuanta senal real hace falta como ancla.
+PCT_SYNTH_GRID = [0.0, 0.25, 0.50, 0.75, 0.90, 1.0]
+
 # ---------------------------------------------------------------------------
 # Barras de 5 min
 # ---------------------------------------------------------------------------

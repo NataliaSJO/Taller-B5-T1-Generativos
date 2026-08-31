@@ -1,0 +1,10 @@
+protocolo,familia,batch_size,learning_rate,dropout,l2,hidden_units,val,n_params,std_cortes,conv_filters,dense_units,global_pool,kernel_size,lstm_units,recurrent_dropout
+ETAPA A · corte unico (ficheros antiguos),dense,64,0.001,0.3,0.0,8,0.0115038342773914,24233.0,,,,,,,
+ETAPA A · corte unico (ficheros antiguos),cnn,64,0.0003,0.1,0.0001,,0.0115859111150105,1505.0,,8,8.0,True,3.0,,
+ETAPA A · corte unico (ficheros antiguos),rnn,16,0.001,0.1,0.0,,0.0115099729349215,2185.0,,,8.0,,,8,0.2
+ETAPA A · walk-forward CON purga,dense,128,0.0001,0.2,0.0,8,0.0130234330426901,24233.0,0.0026848840470898,,,,,,
+ETAPA A · walk-forward CON purga,cnn,128,0.001,0.0,1e-05,,0.0130972494371235,1969.0,0.0028544031573327,8x16,8.0,True,3.0,,
+ETAPA A · walk-forward CON purga,rnn,16,0.001,0.1,0.0,,0.0128741569351404,2185.0,0.0025616962279005,,8.0,,,8,0.2
+ETAPA A · walk-forward SIN purga,dense,128,0.001,0.6,0.0,8,0.0129296004306525,24233.0,0.0026760538189971,,,,,,
+ETAPA A · walk-forward SIN purga,cnn,64,0.0003,0.1,0.0001,,0.0138143822550773,1505.0,0.0027377076826092,8,8.0,True,3.0,,
+ETAPA A · walk-forward SIN purga,rnn,16,0.001,0.1,0.0,,0.0129463849589228,2185.0,0.0024939232278152,,8.0,,,8,0.2

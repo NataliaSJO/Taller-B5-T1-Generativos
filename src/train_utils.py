@@ -116,6 +116,60 @@ def slice_by_depth(
     return X[mask], Y[mask], idx[mask], pct_synth
 
 
+def slice_by_pct(
+    X: np.ndarray,
+    Y: np.ndarray,
+    idx: pd.DatetimeIndex,
+    pct_synth_target: float,
+    train_end: str,
+    is_synthetic: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, pd.DatetimeIndex, float]:
+    """Recorta (X, Y) a un dataset con la PROPORCION pedida de filas
+    sinteticas, manteniendo TODAS las reales disponibles.
+
+    Por que existe esta funcion ademas de `slice_by_depth`: el enunciado
+    (paso 3) pide "datasets que tengan distinto PORCENTAJE de datos
+    sinteticos y reales", y el paso 5 pide ver "como meter mas o menos
+    datos sinteticos modifica el comportamiento del modelo". Recortando por
+    ANIOS de profundidad, la rejilla natural del problema
+    (`SYNTH_DEPTH_YEARS_GRID` = 0, 7, 14, 21, 28) cae en 0% y luego
+    87%-96%: cuatro puntos amontonados en el extremo alto y todo el tramo
+    intermedio sin muestrear. Parametrizando por porcentaje se cubre el eje
+    completo (0, 25, 50, 75, 90, 96%), que es justo el eje del que habla el
+    enunciado.
+
+    Las filas sinteticas se toman siempre las MAS RECIENTES (las contiguas
+    a la ventana real), no una muestra aleatoria del historico: asi el
+    tramo de entrenamiento sigue siendo un bloque temporal continuo y la
+    unica variable que cambia entre datasets es cuanta historia sintetica
+    se anade, no de que epoca procede.
+
+    Con `n_r` filas reales, para una fraccion objetivo `p` hacen falta
+    `n_s = n_r * p / (1 - p)` sinteticas; `p = 1.0` significa entrenar
+    solo con sinteticas (todas las disponibles).
+    """
+    end = pd.Timestamp(train_end)
+    en_rango = idx < end
+    is_synthetic = np.asarray(is_synthetic, dtype=bool)
+
+    reales = np.flatnonzero(en_rango & ~is_synthetic)
+    sinteticas = np.flatnonzero(en_rango & is_synthetic)
+
+    p = float(pct_synth_target)
+    if p >= 1.0:
+        elegidas = sinteticas
+    elif p <= 0.0:
+        elegidas = reales
+    else:
+        n_s = int(round(len(reales) * p / (1.0 - p)))
+        # las mas recientes: `sinteticas` ya viene ordenada por fecha
+        elegidas = np.concatenate([sinteticas[max(len(sinteticas) - n_s, 0):], reales])
+
+    elegidas = np.sort(elegidas)
+    pct = float(is_synthetic[elegidas].mean()) if len(elegidas) else 0.0
+    return X[elegidas], Y[elegidas], idx[elegidas], pct
+
+
 def walk_forward_folds(
     n_folds: int = 4,
     val_months: int = 3,
@@ -340,6 +394,73 @@ def run_depth_grid(
             histories[(gen_name, synth_years)] = hist.history
             if ticker_names is not None:
                 per_ticker[(gen_name, synth_years)] = evaluate_predictor_per_ticker(
+                    model, X_test, Y_test, ticker_names
+                )
+
+    return pd.DataFrame(rows), histories, per_ticker
+
+
+def run_pct_grid(
+    build_model_fn: callable,
+    datasets_by_generator: dict[str, tuple[np.ndarray, np.ndarray, pd.DatetimeIndex, np.ndarray]],
+    X_val: np.ndarray,
+    Y_val: np.ndarray,
+    X_test: np.ndarray,
+    Y_test: np.ndarray,
+    pct_grid: list[float],
+    train_end: str,
+    epochs: int = 100,
+    batch_size: int = 32,
+    verbose: int = 0,
+    ticker_names: list[str] | None = None,
+    early_stopping_patience: int | None = 100,
+) -> tuple[pd.DataFrame, dict, dict]:
+    """Igual que `run_depth_grid` pero recortando por PORCENTAJE de filas
+    sinteticas (`slice_by_pct`) en vez de por anios de profundidad.
+
+    Es la rejilla que responde literalmente al paso 3 del enunciado
+    ("datasets que tengan distinto porcentaje de datos sinteticos y
+    reales") y al paso 5 ("como meter mas o menos datos sinteticos
+    modifica el comportamiento del modelo"): un dataset por cada punto de
+    `pct_grid` y por cada generador, todos evaluados en el MISMO test real.
+
+    `pct=0` es identico para los 4 generadores (no entra ninguna fila
+    sintetica), asi que se entrena una sola vez con la etiqueta
+    "solo_reales", igual que en `run_depth_grid`.
+
+    Devuelve (tabla, historiales, por_ticker) con la misma forma que
+    `run_depth_grid`, indexando por (generador, pct_objetivo)."""
+    rows = []
+    histories = {}
+    per_ticker = {}
+    ref_generator = next(iter(datasets_by_generator))
+
+    for pct in pct_grid:
+        generators_this_pct = (
+            {"solo_reales": datasets_by_generator[ref_generator]}
+            if pct <= 0
+            else datasets_by_generator
+        )
+        for gen_name, (X_full, Y_full, idx_full, is_synth_full) in generators_this_pct.items():
+            X_tr, Y_tr, _, pct_real = slice_by_pct(
+                X_full, Y_full, idx_full, pct, train_end, is_synth_full
+            )
+            model = build_model_fn()
+            hist = model.fit(
+                X_tr, Y_tr, epochs=epochs, batch_size=batch_size,
+                validation_data=(X_val, Y_val), verbose=verbose,
+                callbacks=_make_early_stopping(early_stopping_patience),
+            )
+            metrics = evaluate_predictor(model, X_test, Y_test)
+            rows.append(
+                {
+                    "generator": gen_name, "pct_objetivo": pct,
+                    "n_train": len(X_tr), "pct_synth": pct_real, **metrics,
+                }
+            )
+            histories[(gen_name, pct)] = hist.history
+            if ticker_names is not None:
+                per_ticker[(gen_name, pct)] = evaluate_predictor_per_ticker(
                     model, X_test, Y_test, ticker_names
                 )
 

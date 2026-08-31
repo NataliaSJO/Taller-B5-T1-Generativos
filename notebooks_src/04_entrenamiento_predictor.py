@@ -240,7 +240,66 @@ pl.savefig(fig, "04_precision_direccional_vs_profundidad")
 fig
 
 # %% [markdown]
-# ## 5. Desglose por banco a máxima profundidad sintética
+# ## 5. Rejilla por PORCENTAJE de datos sintéticos × generador
+#
+# El paso 3 del enunciado pide "datasets que tengan distinto **porcentaje**
+# de datos sintéticos y reales", y el paso 5 pide ver "cómo meter más o
+# menos datos sintéticos modifica el comportamiento del modelo". La rejilla
+# de la sección anterior está expresada en **años** de historia recuperada
+# —que es la rejilla natural del problema financiero— pero traducida a
+# porcentaje cae en 0% y luego 87/93/95/96%: cuatro puntos amontonados en
+# el extremo alto, con todo el tramo 0-87% sin muestrear. Ahí no se puede
+# ver la forma de la curva.
+#
+# Esta rejilla barre el eje de forma uniforme (`PCT_SYNTH_GRID`),
+# manteniendo **todas** las filas reales disponibles y añadiendo las
+# sintéticas más recientes que hagan falta para alcanzar cada proporción
+# (`train_utils.slice_by_pct`). El caso `pct=1.0` entrena **sin ninguna
+# fila real**: mide cuánta señal real hace falta como ancla.
+#
+# Misma arquitectura ganadora, mismos pesos reinicializados, mismo test
+# real — lo único que cambia entre versiones es la composición del
+# entrenamiento.
+
+# %%
+results_pct, histories_pct, per_ticker_pct = tu.run_pct_grid(
+    build_final_model, datasets_by_generator, X_val, Y_val, X_test, Y_test,
+    pct_grid=config.PCT_SYNTH_GRID, train_end=config.VAL_START_DATE,
+    epochs=EPOCHS_REJILLA, batch_size=BATCH_SIZE, verbose=0,
+    early_stopping_patience=EARLY_STOPPING_PATIENCE,
+    ticker_names=config.PREDICTOR_TICKERS,
+)
+results_pct.to_csv(config.TABLES_DIR / "04_resultados_rejilla_porcentaje.csv")
+results_pct.sort_values(["generator", "pct_objetivo"])
+
+# %%
+for metrica, nombre_fig in [
+    ("mae", "04_mae_vs_porcentaje"),
+    ("directional_accuracy", "04_precision_direccional_vs_porcentaje"),
+]:
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    solo_reales = results_pct[results_pct.generator == "solo_reales"]
+    if not solo_reales.empty:
+        ax.axhline(
+            solo_reales[metrica].iloc[0], color="0.35", linestyle="--", linewidth=1.4,
+            label="solo reales (0% sintético)",
+        )
+    for gen_name, sub in results_pct[results_pct.generator != "solo_reales"].groupby("generator"):
+        sub = sub.sort_values("pct_synth")
+        ax.plot(sub.pct_synth * 100, sub[metrica], marker="o", linewidth=1.8,
+                color=pl.color_for(gen_name), label=gen_name)
+    ax.set_xlabel("% de ventanas sintéticas en el entrenamiento")
+    ax.set_ylabel(f"test {metrica}")
+    ax.set_title(f"Efecto del porcentaje de datos sintéticos sobre {metrica} (test real)")
+    ax.legend(frameon=False, title="generador")
+    pl.style_axes(ax)
+    fig.tight_layout()
+    pl.savefig(fig, nombre_fig)
+
+fig
+
+# %% [markdown]
+# ## 6. Desglose por banco a máxima profundidad sintética
 #
 # Gráfico de barras agrupado MAE por banco y generador (misma idea que el
 # bloque final de `Taller_con_Datos_SP500_promedio.ipynb`), en el punto de
@@ -274,24 +333,35 @@ pl.savefig(fig, "04_mae_por_banco")
 fig
 
 # %% [markdown]
-# ## 6. Curvas de loss: `solo_reales` (synth_years=0) vs. historia completa
-#    (synth_years=28), por generador
+# ## 7. Curvas de loss de **todos** los entrenamientos
+#
+# El enunciado exige, literalmente, "para **cada** entrenamiento, incluir
+# las curvas de loss donde se vea que el modelo ha convergido" — no una
+# muestra representativa. Así que aquí se vuelcan las tres tandas
+# completas: las 7 arquitecturas candidatas (sección 3), los
+# `4 × (len(SYNTH_DEPTH_YEARS_GRID)-1) + 1` de la rejilla por años y los
+# de la rejilla por porcentaje. Cada panel lleva el mismo criterio de
+# parada (`EarlyStopping` con paciencia alta), así que el tramo plano
+# final es la evidencia de convergencia que se pide.
 
 # %%
-subset_histories = {
-    k: v for k, v in histories.items()
-    if k[1] in (config.SYNTH_DEPTH_YEARS_GRID[0], config.SYNTH_DEPTH_YEARS_GRID[-1])
-}
-fig = pl.plot_loss_grid(subset_histories, ncols=3)
+fig = pl.plot_loss_grid(histories, ncols=4)
 pl.savefig(fig, "04_loss_curvas_rejilla")
 fig
 
+# %%
+fig = pl.plot_loss_grid(histories_pct, ncols=4)
+pl.savefig(fig, "04_loss_curvas_porcentaje")
+fig
+
 # %% [markdown]
-# ## 7. Guardar resultados consolidados (`datos/interim/`, gitignored)
+# ## 8. Guardar resultados consolidados (`datos/interim/`, gitignored)
 #
 # El notebook 05 solo lee estos CSV/tablas — no vuelve a entrenar nada.
 
 # %%
 results.to_pickle(config.INTERIM_DIR / "resultados_finales.pkl")
+results_pct.to_pickle(config.INTERIM_DIR / "resultados_porcentaje.pkl")
 per_ticker_table.to_pickle(config.INTERIM_DIR / "resultados_por_banco.pkl")
-print("Listo. Tabla completa en reports/tables/04_resultados_rejilla_profundidad.csv")
+print("Listo. Tablas en reports/tables/04_resultados_rejilla_profundidad.csv"
+      " y 04_resultados_rejilla_porcentaje.csv")
