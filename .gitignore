@@ -65,3 +65,8 @@ datos/interim/
 .Spotlight-V100
 .Trashes
 
+
+# Logs de stdout de la busqueda de hiperparametros (solo trazas de proceso;
+# los RESULTADOS van en reports/tables/hpsearch_*.csv y si se versionan)
+reports/tables/hpsearch_logs/
+*.csv.tmp

@@ -1,0 +1,5 @@
+generador,sigma,relative,noise_dist,df,mmd,w1,frobenius,shrinkage,shrinkage_alpha,shrinkage_target,marginal,n_iters,grid_size,rotation,latent_dim,epochs,batch_size,gen_hidden,disc_hidden,learning_rate,d_steps_per_g
+noise,0.03066,True,student_t,8.0,0.0,0.0280981757084443,0.321788012494358,,,,,,,,,,,,,,
+gaussian,,,,,0.0036736297148871,0.0392781682586914,0.4083532734780519,True,0.00352,identity,rank_gauss,,,,,,,,,,
+rbig,,,,,0.0,0.0270604303756457,0.346740750235117,,,,,100.0,1000.0,pca,,,,,,,
+gan,,,,,0.0010723327902431,0.0852155614483475,0.3617072435762075,,,,,,,,48.0,2000.0,64.0,32x32,64x32,0.001,5.0

@@ -14,6 +14,17 @@ from pathlib import Path
 ROOT = Path.cwd().parent
 sys.path.insert(0, str(ROOT))
 
+# Recarga automatica de src/ al editarlo: sin esto, si se edita un modulo
+# de src/ con el kernel ya arrancado, Jupyter sigue usando la version que
+# importo la primera vez (y aparecen errores tipo "unexpected keyword
+# argument" con codigo que en disco si es correcto).
+try:
+    ip = get_ipython()
+    ip.run_line_magic("load_ext", "autoreload")
+    ip.run_line_magic("autoreload", "2")
+except NameError:
+    pass  # ejecutandose fuera de IPython/Jupyter
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -30,21 +41,60 @@ empalme = pd.read_csv(config.TABLES_DIR / "03_continuidad_empalme.csv", index_co
 results.head()
 
 # %% [markdown]
-# ## 2. Tabla final: MAE/MSE por generador y años de backfill sintético
-#    añadidos, con mejora relativa frente a "solo reales" (`synth_years=0`)
+# ## 2. Tabla final: MAE por generador y años de backfill sintético añadidos
+#
+# `synth_years=0` es la referencia "solo reales": en ese punto los 4
+# generadores entrenan exactamente con los mismos datos (todavía no se ha
+# añadido ningún día sintético), así que comparten valor. Se construye la
+# tabla con esa fila replicada para las 4 columnas — en vez de dejar una
+# columna `solo_reales` suelta que solo tendría dato en la fila 0 y dejaría
+# el resto de la tabla lleno de huecos.
 
 # %%
-pivot_mae = results.pivot_table(index="synth_years", columns="generator", values="mae")
-baseline_mae = results.loc[results["generator"] == "solo_reales", "mae"].iloc[0]
+GENERADORES = [g for g in results["generator"].unique() if g != "solo_reales"]
+baseline = results[results["generator"] == "solo_reales"].iloc[0]
+baseline_mae = baseline["mae"]
+
+
+def pivot_con_baseline(metric: str) -> pd.DataFrame:
+    """Pivot (synth_years x generador) de `metric`, con la fila
+    synth_years=0 rellenada con el valor de referencia 'solo reales' para
+    los 4 generadores (en ese punto son el mismo modelo)."""
+    piv = (
+        results[results["generator"] != "solo_reales"]
+        .pivot_table(index="synth_years", columns="generator", values=metric)
+    )
+    piv.loc[0] = baseline[metric]
+    return piv.sort_index()[GENERADORES]
+
+
+pivot_mae = pivot_con_baseline("mae")
+pivot_dir = pivot_con_baseline("directional_accuracy")
 mejora_pct = (baseline_mae - pivot_mae) / baseline_mae * 100
 
 pivot_mae.to_csv(config.TABLES_DIR / "05_tabla_mae_final.csv")
+pivot_dir.to_csv(config.TABLES_DIR / "05_tabla_precision_direccional.csv")
 mejora_pct.to_csv(config.TABLES_DIR / "05_tabla_mejora_pct.csv")
-print(f"MAE de referencia (solo la ventana real disponible para entrenar, ~1 año, sin sintéticos): {baseline_mae:.5f}")
+
+print(
+    "Referencia 'solo reales' (synth_years=0, ~1 año real sin sintéticos): "
+    f"MAE {baseline_mae:.5f} | precisión direccional {baseline['directional_accuracy']:.1%}"
+)
 pivot_mae.round(5)
 
+# %% [markdown]
+# Mejora relativa del MAE frente a la referencia (positivo = mejor que
+# entrenar solo con datos reales):
+
 # %%
-mejora_pct.round(1)
+mejora_pct.round(2)
+
+# %% [markdown]
+# Precisión direccional (fracción de días con el signo del retorno
+# acertado; 0.5 = azar):
+
+# %%
+pivot_dir.round(4)
 
 # %% [markdown]
 # ## 3. ¿Mejora el predictor al añadir historia sintética?

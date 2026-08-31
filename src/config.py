@@ -179,9 +179,9 @@ WINDOW_Y_DAYS = 1
 #
 # OJO: la ventana real disponible para ENTRENAR no son los 2 anios enteros
 # de REAL_INTRADAY_YEARS, porque VAL (~6 meses) + TEST (~6 meses) se comen
-# el resto: REAL_TRAIN_YEARS = (VAL_START_DATE - REAL_INTRADAY_START_DATE)
-# ~= 1 anio. depth=0 -> solo ese ~1 anio real, sin ningun dia sintetico;
-# depth=28 -> +28 anios de backfill sintetico (historia casi completa).
+# el resto; lo que queda es (VAL_START_DATE - REAL_INTRADAY_START_DATE)
+# ~= 1 anio. synth_years=0 -> solo ese ~1 anio real, sin ningun dia
+# sintetico; synth_years=28 -> +28 anios de backfill sintetico.
 SYNTH_DEPTH_YEARS_GRID = [0, 7, 14, 21, 28]
 
 # ---------------------------------------------------------------------------

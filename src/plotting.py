@@ -4,9 +4,11 @@ todas las figuras del proyecto (curvas de loss, comparativas de generadores,
 distribuciones real vs. sintetico, resultados finales) sean visualmente
 consistentes.
 
-Paleta categorica fija (nunca se reasigna por orden/ranking, siempre por
-identidad de serie) tomada de la skill de dataviz del equipo, validada para
-que los pares adyacentes sean distinguibles en daltonismo:
+Paleta categorica fija: cada serie tiene SIEMPRE el mismo color por
+identidad (nunca se reasigna por orden o por ranking, para que "el naranja"
+signifique lo mismo en todas las figuras del informe). Los tonos estan
+elegidos de forma que los pares adyacentes sigan siendo distinguibles con
+daltonismo:
   blue #2a78d6, orange #eb6834, aqua #1baf7a, yellow #eda100, magenta #e87ba4
 """
 

@@ -25,6 +25,17 @@ from pathlib import Path
 ROOT = Path.cwd().parent
 sys.path.insert(0, str(ROOT))
 
+# Recarga automatica de src/ al editarlo: sin esto, si se edita un modulo
+# de src/ con el kernel ya arrancado, Jupyter sigue usando la version que
+# importo la primera vez (y aparecen errores tipo "unexpected keyword
+# argument" con codigo que en disco si es correcto).
+try:
+    ip = get_ipython()
+    ip.run_line_magic("load_ext", "autoreload")
+    ip.run_line_magic("autoreload", "2")
+except NameError:
+    pass  # ejecutandose fuera de IPython/Jupyter
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt

@@ -2,8 +2,10 @@
 Ingenieria de features:
   - ventanas X/Y de retornos diarios (mismo esquema que los notebooks de clase)
   - features intradia derivadas de las barras de 5 min (volatilidad realizada,
-    gap overnight, retorno de apertura/cierre, rango) y su perfil a lo largo
-    del dia (para el EDA de "estudiar la distribucion a lo largo del dia")
+    retorno de los primeros/ultimos 30 min y rango high-low) y su perfil a lo
+    largo del dia (para el EDA de "estudiar la distribucion a lo largo del dia")
+  - pool conjunto [retorno diario, features intradia] con el que se entrenan
+    los 4 generadores (ver src/generators.py)
 """
 
 from __future__ import annotations
@@ -15,9 +17,10 @@ from . import config
 
 
 # ---------------------------------------------------------------------------
-# Ventanas X / Y sobre retornos diarios (esquema identico a los notebooks de
-# clase: X = ventana pasada de `window_x` dias, Y = media de los `window_y`
-# dias siguientes)
+# Ventanas X / Y sobre retornos diarios: X = ventana pasada de `window_x`
+# dias, Y = media de los `window_y` dias siguientes. Con
+# config.WINDOW_Y_DAYS=1 esa "media" es simplemente el retorno del dia
+# siguiente, que es lo que predice este proyecto.
 # ---------------------------------------------------------------------------
 def build_xy_windows(
     returns: pd.DataFrame,

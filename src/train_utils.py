@@ -18,6 +18,8 @@ import time
 import numpy as np
 import pandas as pd
 
+from . import config
+
 
 def mse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean((y_true - y_pred) ** 2))
@@ -112,6 +114,85 @@ def slice_by_depth(
     mask = (idx >= start) & (idx < end)
     pct_synth = float(is_synthetic[mask].mean()) if is_synthetic is not None and mask.any() else 0.0
     return X[mask], Y[mask], idx[mask], pct_synth
+
+
+def walk_forward_folds(
+    n_folds: int = 4,
+    val_months: int = 3,
+    final_end: str = None,
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Cortes temporales para validacion walk-forward con ventana de
+    entrenamiento EXPANSIVA.
+
+    Devuelve `n_folds` pares (val_start, val_end) consecutivos de
+    `val_months` meses cada uno, terminando en `final_end` (por defecto
+    `REAL_TEST_HOLDOUT_START_DATE`, para que el TEST no se toque nunca).
+    El entrenamiento de cada fold va desde el inicio que corresponda segun
+    la profundidad sintetica hasta `val_start` de ese fold — es decir, se
+    entrena siempre con el pasado y se valida con el futuro inmediato, que
+    es como se usaria el modelo en produccion.
+
+    Por que esto y no un unico corte train/val: con una sola ventana de
+    validacion (~126 ventanas) las diferencias pequenas entre
+    configuraciones son indistinguibles del ruido, y al comparar cientos
+    de configuraciones se acaba eligiendo la que mejor se ajusta al ruido
+    de ESE corte concreto. Con varios cortes se obtiene una media y una
+    DISPERSION entre periodos: una configuracion que gana en los 4 cortes
+    es creible; una que gana en uno solo, no.
+
+    Ejemplo con los valores por defecto (4 cortes de 3 meses):
+        fold 1: train [inicio, 2024-12) | val [2024-12, 2025-03)
+        fold 2: train [inicio, 2025-03) | val [2025-03, 2025-06)
+        fold 3: train [inicio, 2025-06) | val [2025-06, 2025-09)
+        fold 4: train [inicio, 2025-09) | val [2025-09, 2025-12)
+    """
+    end = pd.Timestamp(final_end or config.REAL_TEST_HOLDOUT_START_DATE)
+    folds = []
+    for k in range(n_folds):
+        val_end = end - pd.DateOffset(months=val_months * k)
+        val_start = val_end - pd.DateOffset(months=val_months)
+        folds.append((val_start, val_end))
+    return list(reversed(folds))
+
+
+def split_fold(
+    X: np.ndarray,
+    Y: np.ndarray,
+    idx: pd.DatetimeIndex,
+    val_start: pd.Timestamp,
+    val_end: pd.Timestamp,
+    synth_years: float,
+    synth_anchor: str,
+    is_synthetic: np.ndarray | None = None,
+    embargo_days: int = config.WINDOW_X_DAYS,
+):
+    """Datos de un fold walk-forward: entrena hasta `val_start` (con la
+    profundidad sintetica pedida) y valida en [val_start, val_end).
+
+    *** PURGA / EMBARGO (`embargo_days`) ***
+    El entrenamiento no llega hasta `val_start`, sino hasta
+    `val_start - embargo_days` dias naturales. Motivo: cada muestra usa
+    una ventana de `WINDOW_X_DAYS` dias de historia, asi que una muestra
+    de entrenamiento fechada pocos dias antes de `val_start` comparte casi
+    toda su ventana de entrada con las primeras muestras de validacion.
+    Eso no es look-ahead (esa muestra no usa nada posterior a su propia
+    fecha), pero crea dependencia estadistica entre train y validacion y
+    hace que la validacion salga OPTIMISTA. Purgar ese solape es la
+    practica estandar en validacion cruzada de series financieras
+    (purging/embargo, Lopez de Prado). El coste es perder ~`embargo_days`
+    de entrenamiento en cada fold; el beneficio es que la metrica de
+    validacion es honesta.
+
+    `embargo_days=0` desactiva la purga (no recomendado; solo para
+    comparar con el protocolo ingenuo).
+    """
+    train_end = val_start - pd.Timedelta(days=embargo_days)
+    X_tr, Y_tr, _, pct_synth = slice_by_depth(
+        X, Y, idx, synth_years=synth_years, train_end=str(train_end),
+        synth_anchor=synth_anchor, is_synthetic=is_synthetic,
+    )
+    val_mask = (idx >= val_start) & (idx < val_end)
+    return X_tr, Y_tr, X[val_mask], Y[val_mask], pct_synth
 
 
 def _make_early_stopping(patience: int | None):

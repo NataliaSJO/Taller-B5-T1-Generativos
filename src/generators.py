@@ -59,9 +59,20 @@ class NoiseGenerator(BaseGenerator):
 
     name = "noise"
 
-    def __init__(self, sigma: float = 0.05, relative: bool = True, random_state: int = 42):
+    def __init__(self, sigma: float = 0.05, relative: bool = True,
+                 noise_dist: str = "normal", df: float = 4.0,
+                 random_state: int = 42):
+        """`noise_dist`: forma del ruido que se suma.
+          - 'normal'    : ruido gaussiano (el de Taller_GANs.ipynb).
+          - 'student_t' : ruido t-Student con `df` grados de libertad,
+            escalado a desviacion `sigma`. Los retornos financieros tienen
+            colas mucho mas pesadas que una Normal (ver notebook 02), asi
+            que perturbar con una t reproduce mejor la frecuencia de dias
+            extremos que perturbar con una Normal."""
         self.sigma = sigma
         self.relative = relative
+        self.noise_dist = noise_dist
+        self.df = df
         self.random_state = random_state
 
     def fit(self, XY_flat: np.ndarray) -> "NoiseGenerator":
@@ -73,8 +84,14 @@ class NoiseGenerator(BaseGenerator):
     def sample(self, n_samples: int) -> np.ndarray:
         idx = self.rng_.integers(0, len(self.pool_), size=n_samples)
         base = self.pool_[idx]
-        noise = self.rng_.normal(0, self.sigma, size=base.shape) * self.scale_
-        return base + noise
+        if self.noise_dist == "student_t":
+            raw = self.rng_.standard_t(self.df, size=base.shape)
+            # una t con df g.l. tiene varianza df/(df-2): se reescala para
+            # que `sigma` signifique lo mismo que en el caso normal
+            raw /= np.sqrt(self.df / (self.df - 2.0)) if self.df > 2 else 1.0
+        else:
+            raw = self.rng_.normal(0, 1, size=base.shape)
+        return base + raw * self.sigma * self.scale_
 
 
 # ---------------------------------------------------------------------------
@@ -94,24 +111,81 @@ class GaussianGenerator(BaseGenerator):
 
     name = "gaussian"
 
-    def __init__(self, shrinkage: bool = True, random_state: int = 42):
+    def __init__(self, shrinkage: bool = True, shrinkage_alpha: float | None = None,
+                 shrinkage_target: str = "identity", marginal: str = "gaussian",
+                 random_state: int = 42):
+        """`shrinkage_alpha`: si se da (0..1), se usa shrinkage MANUAL con
+        esa intensidad hacia una diagonal escalada,
+        `Sigma = (1-a)*S + a*media(diag(S))*I`, en vez de dejar que
+        Ledoit-Wolf elija la intensidad. Permite explorar el grado de
+        regularizacion de la covarianza en vez de aceptar un unico valor
+        automatico.
+
+        `marginal`: espacio en el que se ajusta la Normal.
+          - 'gaussian': se ajusta directamente sobre los datos (el modelo
+            de Taller_Gaussian_solution.ipynb).
+          - 'rank_gauss': cada columna se lleva primero a una N(0,1) por su
+            distribucion empirica (transformada rank-gauss), se ajusta ahi
+            la Normal multivariante y se deshace la transformacion al
+            muestrear. Sigue siendo "una Gaussiana multivariante", pero
+            aplicada a la COPULA en vez de a los datos crudos: conserva las
+            marginales reales (colas pesadas incluidas) y modela solo la
+            dependencia, que es justo lo que una Normal si puede capturar."""
         self.shrinkage = shrinkage
+        self.shrinkage_alpha = shrinkage_alpha
+        self.shrinkage_target = shrinkage_target
+        self.marginal = marginal
         self.random_state = random_state
 
     def fit(self, XY_flat: np.ndarray) -> "GaussianGenerator":
-        self.mean_ = XY_flat.mean(axis=0)
-        if self.shrinkage:
-            lw = LedoitWolf().fit(XY_flat)
+        Z = XY_flat
+        if self.marginal == "rank_gauss":
+            # guarda los valores ordenados de cada columna para poder
+            # deshacer la transformacion al muestrear
+            self.sorted_cols_ = [np.sort(XY_flat[:, j]) for j in range(XY_flat.shape[1])]
+            Z = np.empty_like(XY_flat, dtype=float)
+            n = len(XY_flat)
+            for j in range(XY_flat.shape[1]):
+                order = np.argsort(XY_flat[:, j])
+                ranks = np.empty(n)
+                ranks[order] = np.arange(1, n + 1)
+                Z[:, j] = norm.ppf((ranks - 0.5) / n)
+
+        self.mean_ = Z.mean(axis=0)
+        if self.shrinkage_alpha is not None:
+            S = np.cov(Z.T)
+            a = float(self.shrinkage_alpha)
+            # dos objetivos de shrinkage estandar: identidad escalada (todas
+            # las varianzas iguales, encoge tambien las varianzas) o la
+            # diagonal de S (conserva las varianzas, encoge solo las
+            # correlaciones hacia cero)
+            if self.shrinkage_target == "diagonal":
+                target = np.diag(np.diag(S))
+            else:
+                target = np.mean(np.diag(S)) * np.eye(S.shape[0])
+            self.cov_ = (1 - a) * S + a * target
+            self.shrinkage_ = a
+        elif self.shrinkage:
+            lw = LedoitWolf().fit(Z)
             self.cov_ = lw.covariance_
             self.shrinkage_ = lw.shrinkage_
         else:
-            self.cov_ = np.cov(XY_flat.T)
+            self.cov_ = np.cov(Z.T)
             self.shrinkage_ = 0.0
         self.rng_ = np.random.default_rng(self.random_state)
         return self
 
     def sample(self, n_samples: int) -> np.ndarray:
-        return self.rng_.multivariate_normal(self.mean_, self.cov_, size=n_samples)
+        Z = self.rng_.multivariate_normal(self.mean_, self.cov_, size=n_samples)
+        if self.marginal != "rank_gauss":
+            return Z
+        # deshace la transformacion rank-gauss: N(0,1) -> uniforme -> cuantil
+        # empirico de la columna real correspondiente
+        out = np.empty_like(Z)
+        for j, col_sorted in enumerate(self.sorted_cols_):
+            u = np.clip(norm.cdf(Z[:, j]), 1e-9, 1 - 1e-9)
+            out[:, j] = np.quantile(col_sorted, u)
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -140,9 +214,17 @@ class RBIGGenerator(BaseGenerator):
 
     name = "rbig"
 
-    def __init__(self, n_iters: int = 15, grid_size: int = 300, random_state: int = 42):
+    def __init__(self, n_iters: int = 15, grid_size: int = 300,
+                 rotation: str = "random", random_state: int = 42):
+        """`rotation`: que rotacion se aplica entre gaussianizaciones.
+          - 'random': rotacion ortogonal aleatoria (via QR).
+          - 'pca'   : rotacion a los componentes principales de los datos
+            en esa iteracion. Es la variante clasica del articulo original
+            de RBIG: alinear con los ejes de maxima varianza suele
+            gaussianizar en menos iteraciones que rotar al azar."""
         self.n_iters = n_iters
         self.grid_size = grid_size
+        self.rotation = rotation
         self.random_state = random_state
 
     @staticmethod
@@ -186,7 +268,15 @@ class RBIGGenerator(BaseGenerator):
             U = np.clip(U, 1e-6, 1 - 1e-6)
             G = norm.ppf(U)
 
-            R = self._random_orthogonal(d, rng)
+            if self.rotation == "pca":
+                # rotacion a componentes principales: los autovectores de la
+                # covarianza forman una matriz ortogonal, asi que se invierte
+                # igual (transpuesta) que la rotacion aleatoria
+                cov = np.cov(G.T)
+                _, eigvecs = np.linalg.eigh(cov)
+                R = eigvecs[:, ::-1]  # de mayor a menor varianza
+            else:
+                R = self._random_orthogonal(d, rng)
             self.rotations_.append(R)
             Z = G @ R
 
