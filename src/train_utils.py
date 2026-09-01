@@ -273,17 +273,15 @@ def run_architecture_comparison(
     Y_train: np.ndarray,
     X_val: np.ndarray,
     Y_val: np.ndarray,
-    X_test: np.ndarray,
-    Y_test: np.ndarray,
     epochs: int = 50,
     batch_size: int = 32,
     verbose: int = 0,
     early_stopping_patience: int | None = 100,
 ) -> tuple[pd.DataFrame, dict]:
     """Entrena cada arquitectura de `architectures` (dict nombre -> funcion
-    factoria SIN argumentos que devuelve un modelo listo para `.fit`) sobre
-    el mismo train/val/test y devuelve una tabla comparativa + historiales de
-    loss (para elegir la arquitectura del paso 4 del enunciado).
+    factoria SIN argumentos que devuelve un modelo listo para `.fit`) sobre el
+    mismo train/val y devuelve metricas EN VALIDACION + historiales de loss
+    (para elegir la arquitectura del paso 4 del enunciado sin tocar el test).
 
     `early_stopping_patience`: nº de epochs sin mejora en val_loss antes de
     parar (y quedarse con los mejores pesos vistos, no los ultimos) — mas
@@ -304,17 +302,17 @@ def run_architecture_comparison(
                 callbacks=_make_early_stopping(early_stopping_patience),
             )
             histories[name] = hist.history
-            X_test_eval = X_test
+            X_val_eval = X_val
         else:
             # sklearn (LinearRegression) o BaselinePredictor: sin historial
             # de epochs; LinearRegression necesita la ventana X aplanada.
             needs_flat = type(model).__name__ == "LinearRegression"
             X_fit = X_train.reshape(X_train.shape[0], -1) if needs_flat else X_train
             model.fit(X_fit, Y_train)
-            X_test_eval = X_test.reshape(X_test.shape[0], -1) if needs_flat else X_test
+            X_val_eval = X_val.reshape(X_val.shape[0], -1) if needs_flat else X_val
 
-        metrics = evaluate_predictor(model, X_test_eval, Y_test)
-        rows.append({"model": name, "fit_seconds": time.time() - t0, **metrics})
+        metrics = evaluate_predictor(model, X_val_eval, Y_val)
+        rows.append({"model": name, "split": "validation", "fit_seconds": time.time() - t0, **metrics})
 
     return pd.DataFrame(rows).set_index("model"), histories
 

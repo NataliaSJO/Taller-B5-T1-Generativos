@@ -4,21 +4,23 @@
 # **Requiere TensorFlow** (Google Colab, o un entorno local con
 # `requirements.txt` instalado — ver README, sección "Entorno").
 #
-# Dos pasos, seleccionando siempre la arquitectura por el ERROR EN
-# VALIDACIÓN (nunca en test):
+# Dos pasos, con separacion temporal estricta. Primero se selecciona la
+# arquitectura por el ERROR EN VALIDACIÓN (nunca en test); despues, con esa
+# arquitectura ya fijada, se comparan los generadores en el test final.
 #
 # 1. **Elegir arquitectura** (enunciado, paso 4): con SOLO la ventana real
 #    disponible para entrenar (sin ningún día sintético), se comparan
 #    baseline / lineal / densa / CNN / CNN profunda / RNN / RNN profunda —
 #    misma comparación que `Taller_con_Datos_SP500_promedio.ipynb`, pero
 #    con nuestros bancos y 2 canales por banco (retorno + volatilidad
-#    realizada).
+#    realizada). La tabla generada `04_comparacion_arquitecturas.csv`
+#    incluye metricas de validacion (`split=validation`).
 # 2. **Rejilla años de sintéticos × generador**: con la arquitectura
 #    ganadora, se entrena una versión por cada combinación
 #    (`SYNTH_DEPTH_YEARS_GRID` años de backfill sintético añadidos) ×
 #    (generador que rellenó esos años), evaluando siempre en el MISMO test
-#    real (`REAL_TEST_HOLDOUT_START_DATE` en adelante, jamás visto por
-#    ningún generador ni en entrenamiento).
+#    real (`REAL_TEST_HOLDOUT_START_DATE` en adelante). Ese test no se usa
+#    para decidir la arquitectura.
 #
 # **Sobre las fechas** (ver `src/config.py`): la ventana real de
 # `REAL_INTRADAY_YEARS` (~2 años) se reparte en train/val/test — val y test
@@ -152,7 +154,7 @@ architectures = {
 }
 
 arch_results, arch_histories = tu.run_architecture_comparison(
-    architectures, X_train_arch, Y_train_arch, X_val, Y_val, X_test, Y_test,
+    architectures, X_train_arch, Y_train_arch, X_val, Y_val,
     epochs=EPOCHS_ARQUITECTURA, batch_size=BATCH_SIZE, verbose=0,
     early_stopping_patience=EARLY_STOPPING_PATIENCE,
 )
@@ -165,9 +167,10 @@ pl.savefig(fig, "04_loss_curvas_arquitecturas")
 fig
 
 # %% [markdown]
-# Se elige la arquitectura con menor MAE en **validación** (no en test:
-# el test se reserva íntegro para la comparación de generadores del
-# siguiente paso).
+# Se elige la arquitectura con menor MAE en **validación**. Las columnas
+# `mae`, `mse` y `directional_accuracy` de `arch_results` son de validacion
+# (`split=validation`); el test se reserva para la comparacion de generadores
+# del siguiente paso.
 
 # %%
 ARQUITECTURA_GANADORA = arch_results["mae"].idxmin()

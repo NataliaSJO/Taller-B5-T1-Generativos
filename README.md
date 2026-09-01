@@ -106,9 +106,9 @@ no aportaría nada que el ejercicio original no mostrara ya.
         |                    4 datasets de 30 años (ventanas X/Y)
         v
 04_entrenamiento_predictor  (a) elige arquitectura con SOLO la ventana
-        |                    real disponible; (b) entrena esa arquitectura
-        |                    en la rejilla profundidad histórica ×
-        |                    generador, evaluando siempre en el mismo test
+        |                    real disponible, midiendo en VALIDACIÓN;
+        |                    (b) fija esa arquitectura y compara la rejilla
+        |                    profundidad histórica × generador en TEST
         v
 05_analisis_resultados      Tablas/gráficas finales: ¿mejora con más
                              sintéticos?, ¿qué generador gana?, ¿se
@@ -142,6 +142,16 @@ banco (50 canales = 2 × 25 bancos); `Y` = retorno del **día siguiente**
 por banco. Los generadores del notebook 02 **nunca ven** datos desde
 `VAL_START_DATE` en adelante (ni para entrenarse ni indirectamente vía
 estadísticos) — ni validación ni test se contaminan.
+
+El notebook 04 mantiene separados los dos usos de la muestra real final:
+la arquitectura se selecciona con el tramo de **validación**
+(`[VAL_START_DATE, REAL_TEST_HOLDOUT_START_DATE)`), y el tramo de **test**
+(`[REAL_TEST_HOLDOUT_START_DATE, DAILY_END_DATE]`) se usa después, una vez
+fijada la arquitectura, para comparar los datasets reales/sintéticos. Por
+eso el notebook 04 genera `04_comparacion_arquitecturas.csv` con métricas de
+validación (`split=validation`), mientras que
+`04_resultados_rejilla_profundidad.csv` y las tablas del notebook 05 contienen
+métricas de test.
 
 ### Sobre la métrica: MAE como *loss*, no solo como número final
 
@@ -389,12 +399,12 @@ memorización pura (copiar datos reales) y no generación.
 
 ### 6.4 El predictor del día siguiente: ¿ayudan los sintéticos?
 
-**Arquitectura ganadora** (`04_comparacion_arquitecturas.csv`, entrenada
-SOLO con la ventana real de ~1 año, con `EarlyStopping` de convergencia
-estricta — ver §4): **`cnn_3bloques`** — exactamente `cnn_model_2` de
-`Taller_GANs.ipynb`, la arquitectura con la que la propia clase compara sus
-generadores. Gana en MAE (0.011789) **y** en precisión direccional (0.515,
-la mejor de las 7 arquitecturas comparadas).
+**Arquitectura ganadora** (`04_comparacion_arquitecturas.csv`): se elige
+entrenando cada candidata SOLO con la ventana real de ~1 año
+(`synth_years=0`) y comparando su MAE en **validación**, no en test. La
+tabla generada deja esto explícito con `split=validation`. Solo después de fijar esa
+arquitectura se entra en la rejilla de generadores y porcentajes de datos
+sintéticos, que sí se evalúa en el test real reservado.
 
 **Rejilla final** (`04_resultados_rejilla_profundidad.csv`,
 `05_tabla_generador_final.csv`), test MAE / precisión direccional con
