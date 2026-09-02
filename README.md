@@ -10,21 +10,20 @@ los que solo tenemos precio de cierre diario (Norgate).**
 reales): no ayudan — y el porqué importa más que el resultado.** Con las
 redes correctamente regularizadas, las **38 configuraciones** de las dos
 rejillas (4 generadores × 5 profundidades, y × 6 porcentajes) caben en un
-rango de MAE de **0.000022**: el **3% de un error estándar**. Todas
+rango de MAE de **0.000032**: menos del **5 % de un error estándar**. Todas
 aterrizan en el mismo punto, y ese punto es el **predictor constante**
 —predecir la media por banco, sin mirar la ventana de entrada— que da
-0.011763 en test. Entrenar con 24 años de historia sintética da lo mismo
+0.011762 en test. Entrenar con 24 años de historia sintética da lo mismo
 que entrenar con 4,6 años reales, que da lo mismo que entrenar **sin un
-solo dato real** (`pct=1.0` → 0.011748).
+solo dato real** (`pct=1.0` → 0.011756).
 
 Este informe documenta además **cómo se llegó primero a la conclusión
 contraria**. Sin regularización las redes memorizaban el entrenamiento
-(hasta 344 parámetros por muestra de entrenamiento), y las diferencias
-entre configuraciones —que parecían decir "el Ruido gana", "los sintéticos
-mejoran un 0,3%"— eran diferencias en *cuánto sobreajustaba cada una*, no
-en cuánta señal extraía. Al impedir la memorización, esas diferencias
-desaparecieron: la amplitud de la rejilla cayó de 0.000396 a 0.000022. Ver
-§6.4.
+(hasta 344 parámetros por muestra), y las diferencias entre configuraciones
+—que parecían decir "el Ruido gana", "los sintéticos mejoran un 0,3 %"— eran
+diferencias en *cuánto sobreajustaba cada una*, no en cuánta señal extraía.
+Al impedir la memorización, la amplitud de la rejilla cayó de 0.000396 a
+0.000032 y el orden entre generadores se volvió intercambiable. Ver §6.4.
 
 ## 1. El problema financiero
 
@@ -118,9 +117,10 @@ no aportaría nada que el ejercicio original no mostrara ya.
         |                    4 datasets de 30 años (ventanas X/Y)
         v
 04_entrenamiento_predictor  (a) elige arquitectura con SOLO la ventana
-        |                    real disponible, midiendo en VALIDACIÓN;
-        |                    (b) fija esa arquitectura y compara la rejilla
-        |                    profundidad histórica × generador en TEST
+        |                    real disponible, midiendo en VALIDACIÓN, y
+        |                    contra un predictor CONSTANTE como modelo nulo;
+        |                    (b) fija esa arquitectura y compara dos rejillas
+        |                    en TEST: profundidad (años) y porcentaje
         v
 05_analisis_resultados      Tablas/gráficas finales: ¿mejora con más
                              sintéticos?, ¿qué generador gana?, ¿se
@@ -203,16 +203,35 @@ reproduce el notebook 04 (`04_mae_por_banco.csv`/`.png`). Se añade también
 error de magnitud, pero para un "predictor de precios" también importa si
 acierta la dirección.
 
-### Sobre la convergencia: `EarlyStopping` con paciencia alta
+### Sobre la convergencia: regularización primero, `EarlyStopping` después
 
-El notebook 04 entrena cada modelo con `EarlyStopping` (monitoriza
-`val_loss`, se queda con los mejores pesos vistos) en vez de un número fijo
-de epochs — pero con `patience=100`: hace falta que `val_loss` lleve 100
-epochs SEGUIDAS sin mejorar antes de parar. Eso asegura que la curva de
-loss llega con un tramo largo y plano, la evidencia visual de convergencia
-que pide el enunciado, y no solo "dejó de mejorar hace poco". Los techos de
-epochs (`EPOCHS_ARQUITECTURA`, `EPOCHS_REJILLA`) se dejan holgados para que
-sea `EarlyStopping`, no el techo, quien decida cuándo parar.
+El enunciado pide "para cada entrenamiento, incluir las curvas de loss donde
+se vea que el modelo ha convergido". Conseguirlo requirió dos cosas, y la
+importante no es la obvia.
+
+**La que de verdad importa: regularizar.** Sin `dropout` ni `L2`, las redes
+memorizaban —hasta 394.009 parámetros sobre 1.104 ventanas, 344 por
+muestra— y el `val_loss` **subía** tras su mínimo: mediana +7,4 %, máximo
++17,6 %. Eso no es una curva convergida por mucho que se alargue el
+entrenamiento. Con `dropout=0.3` y `L2=1e-4` (aplicados por igual a la
+selección de arquitectura y a las rejillas, vía el diccionario `REG`), la
+subida baja a una mediana del **+0,20 %** (máximo +0,85 %) en los 38
+entrenamientos: curva plana de verdad.
+
+**La secundaria: `EarlyStopping`** con `patience=20` sobre `val_loss` y
+`restore_best_weights=True`, de modo que el modelo evaluado es el de la
+mejor época, no el de la última. La paciencia se bajó de 100 a 20 tras
+comprobar empíricamente que no aparecen mínimos tardíos: reentrenando dos
+configuraciones con `patience=400`, el mejor punto apenas se movió (época 74
+→ 81 y 92 → 110) y el MAE final cambió menos de un error estándar. Esperar
+100 épocas sin mejora era pagar por una certeza ya medida.
+
+**Cómo leer las curvas.** En todas ellas la validación queda por debajo del
+train. No es un error ni sobreajuste invertido: el propio predictor
+constante ya da train 0.0151 y val 0.0115, porque el tramo de validación
+(seis meses de 2025) es más tranquilo que los ~29 años de entrenamiento. Esa
+distancia la fija el reparto temporal de los datos, no el modelo. Lo único
+que informa es la **forma** de la curva de validación tras su mínimo.
 
 ## 5. Lógica financiera: por qué el diseño aguanta
 
@@ -405,29 +424,32 @@ pipeline completo — entrenar GAN → muestrear → backfill de ~24 años →
 entrenar el predictor → medir en el **mismo test real**
 (`scripts/experimento_espectro_gan.py`).
 
-| GAN | MMD | test MAE | precisión direccional |
-|---|---|---|---|
-| buena_1 | 0.00111 | **0.011774** | 51.5% |
-| buena_2 | 0.00152 | 0.011761 | 51.9% |
-| buena_3 | 0.00185 | **0.011780** ← el peor | 51.2% |
-| intermedia | 0.03558 | 0.011769 | 52.5% |
-| **mala** | 0.30045 | **0.011753** ← el mejor | **52.9%** |
-| muy_mala | 0.89109 | 0.011769 | 52.0% |
+| GAN | MMD | Frobenius | test MAE | precisión direccional |
+|---|---|---|---|---|
+| buena_1 | 0.00111 | 0.238 | 0.011777 | 49.9 % |
+| buena_2 | 0.00152 | 0.300 | **0.011776** | 50.5 % |
+| buena_3 | 0.00185 | 0.212 | **0.011776** | 50.7 % |
+| intermedia | 0.03558 | 1.221 | 0.011778 | 50.3 % |
+| mala | 0.30045 | 2.465 | 0.011779 | 50.0 % |
+| muy_mala | 0.89109 | 2.886 | 0.011780 | 50.1 % |
 
-**El mejor resultado aguas abajo lo da el GAN etiquetado como "malo"**, con
-un MMD 270× peor que el mejor. Pero la lectura correcta **no** es "peor
-generador, mejor predictor" — eso sería sobreinterpretar 6 puntos. Es esta:
-mientras el MMD varía un factor **800×**, todos los MAE caben en un
-**0.23%** de dispersión, y los seis rodean al predictor constante
-(0.011763). **La calidad distribucional del generador es irrelevante para
-el rendimiento final.**
+**Variando el MMD un factor 800×, el test MAE se mueve 0.000004** — el 0,6 %
+de un error estándar. Los seis quedan además ligeramente por encima del
+predictor constante (0.011762) y con precisión direccional clavada en el
+50 %.
 
-> ⚠️ Esta tabla es la única de §6 que sigue entrenando su predictor **sin
-> regularización** (`scripts/experimento_espectro_gan.py` construye una
-> `cnn_3bloques` sin dropout ni L2, en vez de la arquitectura y el `REG` del
-> notebook 04). No invalida la conclusión —la dispersión ya es
-> despreciable— pero para ser estrictamente comparable con §6.4 habría que
-> alinear ese script con el resto del pipeline.
+Un matiz que corrige a la versión anterior de este informe: ahora que el
+experimento usa **el mismo predictor que la rejilla** (misma arquitectura,
+misma regularización, misma purga), las correlaciones de Spearman entre
+fidelidad y MAE salen **positivas y altas** (MMD +0.83, W1 +0.94, Frobenius
++0.83), no negativas. Es decir, el orden *sí* es el esperado: mejor
+generador, mejor MAE.
+
+Pero eso no rehabilita la fidelidad como criterio, porque **el efecto
+completo es 175 veces menor que el error de medida**. Es exactamente el tipo
+de correlación que parece impresionante hasta que se mira la escala del eje.
+Antes salía negativa simplemente porque el ruido de entrenamiento superaba a
+la señal y el signo caía al azar.
 
 *¿Por qué?* Encaja con la limitación estructural documentada en §5.3: la
 volatilidad sintética se **deriva** del retorno real de cada día vía
@@ -444,84 +466,100 @@ memorización pura (copiar datos reales) y no generación.
 
 ### 6.4 El predictor del día siguiente: ¿ayudan los sintéticos?
 
-**No. Nada de lo que se prueba aquí bate a predecir una constante.**
+**No. Nada de lo que se prueba aquí bate a predecir una constante — y la
+constante gana la comparación de arquitecturas.**
 
 #### El modelo nulo, que faltaba
 
-La comparación de arquitecturas incluye ahora `constante`: predecir la media
-por banco del entrenamiento, ignorando por completo la ventana `X`. Es la
-referencia que importa. El otro suelo, `baseline`, repite el retorno del día
-anterior; como los retornos diarios son casi incorrelados en el tiempo, eso
-es *activamente* peor que no predecir nada, y compararse solo contra él hace
+La comparación incluye `constante`: predecir la media por banco del
+entrenamiento, ignorando por completo la ventana `X`. Es la referencia que
+importa. El otro suelo, `baseline`, repite el retorno del día anterior; como
+los retornos diarios son casi incorrelados en el tiempo, eso es
+*activamente* peor que no predecir nada, y compararse solo contra él hace
 que cualquier red parezca buena.
 
 `04_comparacion_arquitecturas.csv`, MAE en **validación**:
 
 | Modelo | MAE val | vs. constante | Precisión direccional |
 |---|---|---|---|
-| **rnn_1capa** | **0.011496** | −0.000014 | 53.1% |
-| rnn_2capas | 0.011497 | −0.000012 | 53.0% |
-| cnn_3bloques | 0.011498 | −0.000012 | 52.8% |
-| `constante` | 0.011509 | — | 52.8% |
-| cnn_1bloque | 0.011871 | +0.000362 ← peor que la constante | 51.7% |
-| dense | 0.012273 | +0.000764 ← peor que la constante | 50.1% |
-| `baseline` (repetir ayer) | 0.017142 | +0.005633 | 46.3% |
-| `linear` | 0.020827 | +0.009317 | 50.9% |
+| **`constante`** | **0.011509** | — | 52.8 % |
+| cnn_3bloques | 0.011519 | +0.000010 | 52.7 % |
+| rnn_1capa | 0.011520 | +0.000010 | 52.4 % |
+| rnn_2capas | 0.011521 | +0.000012 | 52.1 % |
+| cnn_1bloque | 0.011691 | +0.000182 | 51.1 % |
+| dense | 0.012450 | +0.000941 | 49.6 % |
+| `baseline` (repetir ayer) | 0.017142 | +0.005633 | 46.3 % |
+| `linear` | 0.020197 | +0.008688 | 50.5 % |
 
-La mejor red le gana a la constante por **0.000014**, el 2% de un error
-estándar. Dos de las cinco redes son peores que ella.
+**Ninguna de las cinco redes bate al modelo nulo.** Las tres mejores quedan
+a 0.000010-0.000012 de él, el 1,5 % de un error estándar; las otras dos son
+claramente peores.
 
-#### La regularización cambió el orden — y desenmascaró a la densa
+Ese empate es tan estrecho que **no es reproducible sin fijar la semilla**:
+en una ejecución previa las tres redes quedaban 0.000012 *por debajo* de la
+constante en vez de por encima. Misma magnitud, signo opuesto. Por eso el
+proyecto fija `config.RANDOM_SEED` y elige arquitectura con la **regla de un
+error estándar** (entre las empatadas, la más simple) en vez de con el
+mínimo a secas, que aquí es ruido.
 
-Antes de aplicar `dropout=0.3` y `l2=1e-4`, la `dense` marcaba 0.011579 y
-parecía competitiva. Con regularización marca 0.012273, la peor de las
-redes. Aquella cifra venía de un modelo con **394.009 parámetros
-entrenándose sobre 1.145 ventanas** —344 parámetros por muestra— que
-memorizaba el entrenamiento y del que `restore_best_weights` rescataba un
-punto afortunado de las primeras épocas. Al impedirle memorizar se ve su
-capacidad real de generalizar, que es peor que no predecir nada.
+#### Las curvas de loss dicen lo mismo
 
-La regularización también arregló las curvas de convergencia. En los 37
-entrenamientos de las rejillas, el `val_loss` sube ahora una **mediana del
-+0.20%** tras su mínimo (máximo +0.85%), frente al **+7.4% de mediana y
-+17.6% de máximo** sin regularizar. Ahora las curvas de
-`04_loss_curvas_*.png` muestran de verdad lo que el enunciado pide ver.
+Las tres redes que empatan con la constante se aplanan **exactamente en su
+nivel**: train 0.0151, validación 0.0115, que son los valores del predictor
+constante en cada tramo. Han aprendido a predecir la media y ahí se quedan.
+
+Las dos que sí bajan de 0.0151 en train —`dense` hasta 0.0117— son
+precisamente las dos que empeoran en validación. En este problema, todo lo
+que una red consigue por debajo del suelo de la constante es memorización, y
+lo paga fuera de la muestra.
+
+#### Sobre el hueco entre train y validación
+
+En todas las curvas la validación queda por debajo del train. **No es
+sobreajuste al revés ni un error**: el propio predictor constante ya da
+train 0.0151 y val 0.0115, porque el tramo de validación (seis meses de
+2025) es más tranquilo que los ~29 años de entrenamiento, que incluyen la
+puntocom, 2008 y el COVID. Esa distancia la fija el reparto temporal de los
+datos, no el modelo. Lo único que informa es la **forma** de la curva de
+validación: aquí es plana, con una subida mediana del **+0,20 %** tras el
+mínimo (máximo +0,85 %) en los 38 entrenamientos.
 
 #### Las dos rejillas
 
 `04_resultados_rejilla_profundidad.csv`, test MAE a máxima profundidad
-(+24 años sintéticos, 84% de filas sintéticas):
+(+24 años sintéticos, 84,3 % de filas sintéticas):
 
-| Generador | MAE test | vs. constante | Δ vs. solo reales |
+| Generador | MAE test | vs. constante | Precisión direccional |
 |---|---|---|---|
-| RBIG | 0.011753 | −0.08% | +0.05% |
-| Ruido | 0.011753 | −0.08% | +0.05% |
-| GAN | 0.011755 | −0.07% | +0.04% |
-| Gaussiana | 0.011766 | +0.02% | −0.06% |
-| solo reales (`synth_years=0`) | 0.011759 | −0.03% | — |
-| **`constante`** | **0.011763** | — | — |
+| Gaussiana | 0.011776 | +0.12 % | 50.4 % |
+| Ruido | 0.011777 | +0.13 % | 49.8 % |
+| RBIG | 0.011778 | +0.14 % | 50.1 % |
+| GAN | 0.011780 | +0.15 % | 50.0 % |
+| solo reales (`synth_years=0`) | 0.011786 | +0.20 % | 50.1 % |
+| **`constante`** | **0.011762** | — | **52.9 %** |
 
-Toda la rejilla de profundidad cae entre 0.011744 y 0.011766 —**amplitud
-0.000022**— y la de porcentaje entre 0.011744 y 0.011768. Un error estándar,
-por bootstrap de días sobre el propio test, es **0.000698**: la amplitud
-completa de las 38 configuraciones es el **3% de un error estándar**.
+Las 17 combinaciones de profundidad caen entre 0.011754 y 0.011786, y las 21
+de porcentaje dentro del mismo rango. **Amplitud total de las 38: 0.000032**,
+frente a un error estándar de **0.000689** (bootstrap por días sobre el
+test). Es decir, todo el experimento cabe en el **4,7 % de un error
+estándar**.
 
-El caso límite es el más elocuente. `pct=1.0` entrena **sin una sola fila
-real** y da 0.011748-0.011757 — indistinguible de entrenar con todo real.
-Si el modelo aprendiera algo de los datos, quitarle todos los reales
-tendría que notarse. No se nota.
+El caso límite es el más elocuente: `pct=1.0` entrena **sin una sola fila
+real** y da 0.011756 — mejor que `solo_reales` (0.011786) e indistinguible
+del resto. Si el modelo aprendiera algo de los datos, quitarle todos los
+reales tendría que notarse. No se nota.
 
 #### Por qué el informe anterior decía lo contrario
 
-La versión previa de esta tabla daba "el Ruido gana con +0.33% de mejora" y
-"RBIG empeora un 1.4%". Aquellos números salían de modelos sin regularizar,
-y lo que medían era **cuánto sobreajustaba cada configuración**, no cuánta
-señal extraía: con 1.145-7.074 muestras y decenas de miles de parámetros,
-qué punto rescataba `restore_best_weights` dependía del azar de la
-inicialización. Al regularizar, la amplitud de la rejilla cayó de 0.000396
-a 0.000022 y el orden entre generadores se volvió intercambiable.
+Una versión previa de esta tabla daba "el Ruido gana con +0,33 % de mejora"
+y "RBIG empeora un 1,4 %". Aquellos números salían de modelos **sin
+regularizar**, y lo que medían era cuánto sobreajustaba cada configuración:
+con 1.104-7.033 muestras y decenas de miles de parámetros, qué punto
+rescataba `restore_best_weights` dependía del azar de la inicialización.
 
-Esa es la lección metodológica del proyecto, y es más valiosa que la
+Al añadir `dropout=0.3` y `L2=1e-4` la amplitud de la rejilla cayó de
+0.000396 a 0.000032 y el orden entre generadores se volvió intercambiable.
+Ésa es la lección metodológica del proyecto, y es más valiosa que la
 respuesta a la pregunta original: **sin un modelo nulo en la tabla y sin
 control del sobreajuste, un pipeline de este tipo produce rankings de
 generadores que parecen significativos y no lo son.**
@@ -540,59 +578,82 @@ scripts aparte, no notebooks, porque son procesos de horas que se
 paralelizan sobre todos los núcleos:
 
 ```bash
-python scripts/hp_search_generators.py --minutes 400 --worker 0   # generadores
-python scripts/hp_search.py --stage A --walk-forward --embargo-days 60  # predictor
-python scripts/analizar_hpsearch.py                                # elegir ganadores
-python scripts/experimento_espectro_gan.py                         # fidelidad vs utilidad
+python scripts/hp_search_generators.py --minutes 60 --worker 0    # generadores
+python scripts/analizar_hpsearch.py                               # elegir ganadores
+python scripts/experimento_espectro_gan.py                        # fidelidad vs utilidad
 ```
+
+**Atajo para el notebook 04.** Sus 38 entrenamientos son independientes entre
+sí, así que se pueden repartir entre procesos. `scripts/rejilla_paralela.py`
+lo hace y escribe en los mismos checkpoints que el notebook lee, de modo que
+al ejecutarlo después se los encuentra hechos y solo genera tablas y
+gráficas:
+
+```bash
+./scripts/lanzar_rejilla_paralela.sh 10       # 10 workers
+```
+
+En una máquina de 10 núcleos: **9 min 36 s** frente a las 2 h 02 min de la
+versión secuencial. El resultado es idéntico porque `train_utils.set_seed()`
+re-fija `config.RANDOM_SEED` antes de construir **cada** modelo, así que no
+depende de en qué orden ni en qué proceso se entrene cada combinación.
 
 ## 7. Conclusiones
 
 **1. Los datos sintéticos no ayudan, y el experimento lo demuestra con
-claridad.** Las 38 configuraciones caben en el 3% de un error estándar y
-todas coinciden con el predictor constante. El caso `pct=1.0` —entrenar sin
-una sola fila real— da el mismo resultado que entrenar con todo real: si el
-modelo estuviera aprendiendo algo de los datos, eso tendría que notarse.
+claridad.** Las 38 configuraciones caben en 0.000032 de MAE, el 4,7 % de un
+error estándar, y todas coinciden con el predictor constante (0.011762). El
+caso `pct=1.0` —entrenar sin una sola fila real— da 0.011756, mejor que
+entrenar solo con reales: si el modelo estuviera aprendiendo algo de los
+datos, eso tendría que ser imposible.
 
 **2. La conclusión contraria del informe anterior venía de sobreajuste, no
-de señal.** Con redes de hasta 394.009 parámetros sobre 1.145 ventanas, las
+de señal.** Con redes de hasta 394.009 parámetros sobre 1.104 ventanas, las
 diferencias entre generadores medían cuánto memorizaba cada configuración.
-Al añadir `dropout=0.3` y `l2=1e-4`, la amplitud de la rejilla cayó de
-0.000396 a 0.000022 y el ranking se volvió intercambiable. **Ésta es la
-lección metodológica principal del trabajo**: sin modelo nulo en la tabla y
-sin control del sobreajuste, este tipo de pipeline produce rankings que
-parecen significativos y no lo son.
+Al añadir `dropout=0.3` y `L2=1e-4`, la amplitud cayó de 0.000396 a 0.000032
+y el ranking se volvió intercambiable. **Ésta es la lección metodológica
+principal del trabajo**: sin modelo nulo en la tabla y sin control del
+sobreajuste, este tipo de pipeline produce rankings que parecen
+significativos y no lo son.
 
-**3. La explicación es estructural, no accidental.** La volatilidad
-sintética se deriva, por construcción, del retorno real conocido de cada
-día: su correlación con `|retorno|` es 0.452 en el tramo sintético frente a
-0.455 en el real — se reproduce la relación con fidelidad, y por eso mismo
-no aporta información nueva más allá del canal de retorno que el modelo ya
-tiene. Peor aún, el *conditional matching* muestrea cada día de forma
-independiente, así que **destruye la agrupación de volatilidad**: la
-autocorrelación a un día de la volatilidad realizada es **0.088 en el tramo
-sintético frente a 0.587 en el real**. Durante 24 de los 30 años, el segundo
-canal de entrada tiene una estructura temporal que ningún mercado produce.
+**3. Ni siquiera la elección de arquitectura era reproducible.** Las tres
+mejores redes están separadas por 0.000003 en MAE de validación, y el orden
+entre ellas cambiaba de una ejecución a otra por el azar de la
+inicialización de pesos. Se corrigió fijando `config.RANDOM_SEED` y eligiendo
+con la regla de un error estándar —entre las empatadas, la más simple— que
+además resultó ser la más barata de entrenar (`rnn_1capa`, 38.465 parámetros
+frente a los 143.681 de `rnn_2capas`).
 
-**4. La fidelidad distribucional no predice la utilidad.** Variando el MMD
-del GAN un factor 800×, el MAE final varía un 0.23% (§6.3). El caso extremo
+**4. La explicación es estructural, no accidental.** La volatilidad sintética
+se deriva, por construcción, del retorno real conocido de cada día: su
+correlación con `|retorno|` es 0.452 en el tramo sintético frente a 0.455 en
+el real — se reproduce la relación con fidelidad, y por eso mismo no aporta
+información nueva más allá del canal de retorno que el modelo ya tiene.
+Peor aún, el *conditional matching* muestrea cada día de forma independiente,
+así que **destruye la agrupación de volatilidad**: la autocorrelación a un
+día es **0.088 en el tramo sintético frente a 0.587 en el real**. Durante 24
+de los 30 años, el segundo canal de entrada tiene una estructura temporal que
+ningún mercado produce.
+
+**5. La fidelidad distribucional no predice la utilidad.** Variando el MMD
+del GAN un factor 800×, el MAE final varía 0.000004 (§6.3). El caso extremo
 es el generador de Ruido, que obtiene MMD ≈ 0 simplemente **copiando**
 muestras reales y perturbándolas: fidelidad perfecta por memorización, no
-por generación. Elegir el generador por fidelidad habría sido elegirlo por
-el criterio equivocado.
+por generación.
 
-**5. Sobre el tamaño de las búsquedas, con precisión.** Una versión anterior
+**6. Sobre el tamaño de las búsquedas, con precisión.** Una versión anterior
 titulaba §6.2 "7.426 evaluaciones". Ese número contaba evaluaciones, no
 cobertura: la Gaussiana se evaluó 2.928 veces sobre un espacio de **tres**
 configuraciones, y RBIG 468 veces sobre **once**. Conviene reportar
 configuraciones distintas, no evaluaciones.
 
-**6. Lo que este trabajo no puede responder.** Con un test de 122 días y 25
-bancos que correlacionan 0.715 entre sí, el tamaño muestral efectivo está
+**7. Lo que este trabajo no puede responder.** Con un test de 122 días y 25
+bancos que correlacionan 0,715 entre sí, el tamaño muestral efectivo está
 mucho más cerca de 122 observaciones que de 3.050. Un error estándar del MAE
-es 0.000698 — el 6% del propio MAE. Cualquier efecto menor que eso es
-indetectable con estos datos, y el efecto que buscábamos resultó ser al
-menos 30 veces más pequeño.
+es 0.000689 — el 6 % del propio MAE. Cualquier efecto menor que eso es
+indetectable con estos datos, y el efecto buscado resultó ser 20 veces más
+pequeño. El horizonte elegido (retorno a un día de un banco líquido) es
+además el de peor relación señal/ruido posible: 92 veces más ruido que señal.
 
 ## 8. Estructura del repositorio
 
@@ -617,6 +678,8 @@ menos 30 veces más pequeño.
 │   ├── modelos.py               arquitecturas de red (predictor + GAN)
 │   ├── train_utils.py          mezcla real/sintético, rejilla, métricas
 │   └── plotting.py             estilo y gráficas compartidas
+├── v2_persistencia_temporal/  anexo: backfill con memoria y control con
+│                               volatilidad REAL de Garman-Klass (ver §10)
 ├── reports/
 │   ├── figures/*.png            todas las gráficas generadas (versionadas)
 │   └── tables/*.csv             todas las tablas generadas (versionadas)
@@ -625,6 +688,8 @@ menos 30 veces más pequeño.
     ├── hp_search_generators.py  busqueda de hiperparametros de los 4 generadores
     ├── hp_search.py             busqueda del predictor (walk-forward + purga)
     ├── analizar_hpsearch.py     elige ganadores con la regla de 1 error estandar
+    ├── rejilla_paralela.py      las 38 combinaciones del nb 04 en N procesos
+    ├── lanzar_rejilla_paralela.sh   lanza los workers y consolida checkpoints
     └── experimento_espectro_gan.py   ¿predice la fidelidad la utilidad? (§6.3)
 ```
 
@@ -678,9 +743,21 @@ La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
 - El backfill asume que la relación `(retorno diario, features intradía)`
   aprendida en 2024-2026 es representativa de 1996-2024; es la hipótesis
   de trabajo central del proyecto, no un hecho verificado independientemente.
-- La rejilla de arquitecturas (notebook 04) usa los hiperparámetros por
-  defecto de `src/modelos.py`; con más tiempo de cómputo valdría la pena
-  una búsqueda más fina (learning rate, tamaño de ventana, nº de capas).
+- La comparación de arquitecturas usa `dropout=0.3` y `L2=1e-4` fijos, no
+  buscados: se eligieron para que las curvas converjan, no por optimizar el
+  MAE. Con más tiempo valdría la pena una búsqueda fina de learning rate,
+  tamaño de ventana y número de capas, aunque dado que las tres mejores
+  redes empatan con el modelo nulo, es improbable que cambiara la conclusión.
+- **El tamaño del test limita lo que se puede afirmar.** 122 días y 25
+  bancos que correlacionan 0,715 entre sí: las "3.050 observaciones" son
+  efectivamente ~122. Un error estándar del MAE es 0.000689, el 6 % del
+  propio MAE, así que cualquier efecto menor que eso es indetectable —
+  y el buscado resultó ser 20 veces más pequeño.
+- **El horizonte elegido es el más difícil posible.** El retorno a un día de
+  un banco líquido tiene 92 veces más ruido que señal; a 30 días la
+  proporción baja a 15×. El enunciado no exigía ningún horizonte concreto
+  ("los datos son a elección de los estudiantes"), así que repetir el
+  estudio sobre una media a varias semanas es la continuación natural.
 - El generador de la GAN termina en `activation='tanh'`, con rango útil
   real en `[-1, 1]` — pero nuestras columnas valen típicamente 0.01-0.03 en
   magnitud, muy por debajo de eso. `GANGenerator.fit()` reescala cada
