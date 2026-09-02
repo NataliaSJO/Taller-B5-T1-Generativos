@@ -51,7 +51,7 @@ RIGOR FINANCIERO
 
 5. El target sale de Garman-Klass sobre OHLC diario REAL (ver
    volatilidad_ohlc.py), no de la realizada de 5 min. Es deliberado: la
-   realizada solo existe en los ultimos 2 anios, asi que usarla obligaria
+   realizada solo existe desde 2020-11 (~5.5 anios), asi que usarla obligaria
    a poner volatilidad SINTETICA como target en el tramo historico y
    estariamos midiendo si el sintetico predice al sintetico. Garman-Klass
    es real en los 30 anios y correlaciona 0.812 con la realizada

@@ -1,9 +1,9 @@
 # Taller B5-T1 · Generación de datos financieros sintéticos
 
 **Predecir el retorno del día siguiente de acciones bancarias de EEUU, usando
-volatilidad intradía real (últimos 2 años, barras de 5 min de EOD Historical
+volatilidad intradía real (desde 2020-11, barras de 5 min de EOD Historical
 Data) allí donde existe, y volatilidad intradía sintética — generada por 4
-modelos generativos distintos — para reconstruir los 28 años anteriores de
+modelos generativos distintos — para reconstruir los ~24 años anteriores de
 los que solo tenemos precio de cierre diario (Norgate).**
 
 **Resultado (§6-7, con los 6 notebooks ejecutados end-to-end sobre datos
@@ -35,8 +35,10 @@ de generador compensa más?**
 La respuesta se construye con datos reales de principio a fin:
 - **Retorno diario real** de 25 bancos de EEUU, hasta 36 años (1990-2026),
   del dump de Norgate (`datos/norgate_bancos_us_export_20260602_1043.zip`).
-- **Barras de 5 minutos reales** de hasta 150 bancos de EEUU, ~2 años
-  (2024-2026), descargadas de la API de [EOD Historical Data](https://eodhd.com/)
+- **Barras de 5 minutos reales** de hasta 150 bancos de EEUU, ~5,5 años
+  (2020-11 a 2026-08 — todo lo que sirve el endpoint `/intraday`, que no
+  tiene profundidad anterior a finales de 2020), descargadas de la API de
+  [EOD Historical Data](https://eodhd.com/)
   con la key del aula (`datos/APkey`, **no está en el repo** — ver
   [§9 Entorno](#9-entorno)).
 
@@ -64,7 +66,8 @@ directamente ventanas `(X, Y)` de retornos y se comparan añadiendo distintas
 cantidades de muestras sintéticas *completas* a un `train_test_split`
 aleatorio. Aquí, en cambio, los 4 generadores aprenden la distribución
 conjunta real `[retorno_diario, volatilidad_realizada, retorno_apertura_30m,
-retorno_cierre_30m, rango_intradía]` sobre la ventana real de 2 años (todos
+retorno_cierre_30m, rango_intradía]` sobre la ventana real (2020-11 →
+2025-06, ~4,6 años; val y test quedan fuera) (todos
 son generadores **incondicionales** — no cambia el mecanismo de
 entrenamiento entre ellos), y **el retorno diario ya conocido de cada día
 histórico (real, de Norgate) se usa para condicionar por *conditional
@@ -79,7 +82,7 @@ no aportaría nada que el ejercicio original no mostrara ya.
 |---|---|---|
 | Nº bancos | 25 | hasta 150 |
 | Para qué | Backbone de 30 años del predictor final | Pool de entrenamiento de los 4 generadores |
-| Requisito | Retorno diario real completo desde 1990 en Norgate | Solo necesitan datos en la ventana real de 2 años |
+| Requisito | Retorno diario real completo desde 1990 en Norgate | Solo necesitan datos en la ventana real (2020-11 en adelante) |
 | Selección | Bancos EEUU (`domicile == "United States Of America"`), activos, `Diversified Banks`/`Regional Banks`, ordenados por `shares_outstanding`, con `first_quoted_date == 1990-01-02` **y** cobertura real verificada en `export.bank_prices_daily` (2 candidatos con "primera fecha" 1990 pero solo 352 filas reales en el dump — descartados, ver `src/config.py`) | Mismo filtro de universo pero sin exigir historia larga — más bancos (incluso poco líquidos o intervenidos) dan un pool de entrenamiento más rico para los generadores. Un banco entra si tiene ≥60 sesiones intradía válidas en la ventana real; unas pocas filas (<0.1%) con valores imposibles — tickers en proceso de quiebra/exclusión con cruces de precio erráticos, no volatilidad de mercado real — se descartan por cordura (`config.POOL_MAX_*`). |
 
 `PREDICTOR_TICKERS ⊂ GENERATOR_TICKERS` siempre.
@@ -100,7 +103,7 @@ no aportaría nada que el ejercicio original no mostrara ya.
         |                    real vs. sintético por variable + distancia
         |                    de correlación
         v
-03_backfill_condicional     Por cada generador, rellena 28 años de
+03_backfill_condicional     Por cada generador, rellena ~24 años de
         |                    volatilidad SINTÉTICA condicionada al retorno
         |                    diario REAL (conditional matching); construye
         |                    4 datasets de 30 años (ventanas X/Y)
@@ -124,15 +127,19 @@ hiperparámetros**, se pasan como argumentos desde el notebook al llamar a
 ### Ventanas / fechas (`src/config.py`)
 
 ```
-1996-05-29 ─────────────── 2024-05-29 ── 2025-06-01 ── 2025-12-01 ── 2026-05-29
-│  28 años, retorno real + vol. SINTÉTICA │  2 años reales                     │
+1996-05-29 ─────────────── 2020-11-02 ── 2025-06-01 ── 2025-12-01 ── 2026-05-29
+│ ~24 años, retorno real + vol. SINTÉTICA │ ~5,5 años reales (5 min de EODHD)  │
 └───────────── entrenamiento (segun synth_years) ─────┘   VAL      │   TEST    │
-                                            ~1 año
+                                           ~4,6 años
 ```
 
+La frontera 2020-11-02 **no es una elección de diseño**: es la primera
+sesión que sirve el endpoint `/intraday` de EODHD. Todo el intradía real
+descargado se usa como real; solo se sintetiza lo que de verdad no existe.
+
 El entrenamiento **siempre termina en `VAL_START_DATE`**: val (~6 meses) y
-test (~6 meses) se comen la mitad de los 2 años reales, así que la ventana
-"solo reales" (`synth_years=0`) para entrenar es en realidad solo ~1 año —
+test (~6 meses) se comen el último año de la ventana real, así que la
+ventana "solo reales" (`synth_years=0`) para entrenar es ~4,6 años —
 `synth_years` cuenta cuántos años de backfill sintético se añaden ANTES de
 `REAL_INTRADAY_START_DATE`, no cuántos años totales de entrenamiento hay
 (ver `src/train_utils.py::slice_by_depth`).
@@ -226,8 +233,7 @@ posterior a `t-1` interviene en absoluto.
 
 *¿Por qué no, entonces, un `.ffill()`/`.bfill()` literal (propagar el
 último o el próximo valor real conocido)?* Porque dejaría una volatilidad
-**constante durante 28 años**, ciega a la puntocom, 2008, el COVID o la
-crisis bancaria de 2023. `03_backfill_serie_temporal_JPM.png` muestra que
+**constante durante ~24 años**, ciega a la puntocom, 2008 o el COVID. `03_backfill_serie_temporal_JPM.png` muestra que
 el *conditional matching* reproduce picos de volatilidad justo en esos años
 de crisis — porque usa el retorno real de cada día, que sí las capta. Un
 `.ffill()` destruiría esa señal.
@@ -305,9 +311,8 @@ están citadas literalmente de `reports/tables/` y `reports/figures/`.
   simplemente que la configuración de clase no está ajustada para este
   problema.
 - **`03_backfill_serie_temporal_JPM.png`**: la volatilidad sintética de
-  JPM (28 años) muestra picos claros en 2001-02, 2008-09, 2020 y
-  2023 — **coherentes con crisis reales** (dot-com, financiera, COVID,
-  banca regional) porque el *conditional matching* usa el retorno diario
+  JPM (~24 años) muestra picos claros en 2001-02, 2008-09 y 2020 —
+  **coherentes con crisis reales** (dot-com, financiera, COVID) porque el *conditional matching* usa el retorno diario
   REAL de esos días, no una serie inventada.
 - **`03_continuidad_empalme.csv`**: el nivel medio de volatilidad
   sintética justo antes de 2024 es ~1.24-1.28× el nivel real justo
@@ -359,7 +364,7 @@ real?*) que **no es** la pregunta del proyecto (*¿ayuda el sintético a
 predecir?*). Son criterios distintos y podían discrepar, así que se
 contrastó directamente: se cogieron 6 GAN que cubren **tres órdenes de
 magnitud** de calidad distribucional y, para cada uno, se recorrió el
-pipeline completo — entrenar GAN → muestrear → backfill de 28 años →
+pipeline completo — entrenar GAN → muestrear → backfill de ~24 años →
 entrenar el predictor → medir en el **mismo test real**
 (`scripts/experimento_espectro_gan.py`).
 
@@ -400,7 +405,7 @@ memorización pura (copiar datos reales) y no generación.
 ### 6.4 El predictor del día siguiente: ¿ayudan los sintéticos?
 
 **Arquitectura ganadora** (`04_comparacion_arquitecturas.csv`): se elige
-entrenando cada candidata SOLO con la ventana real de ~1 año
+entrenando cada candidata SOLO con la ventana real (~4,6 años)
 (`synth_years=0`) y comparando su MAE en **validación**, no en test. La
 tabla generada deja esto explícito con `split=validation`. Solo después de fijar esa
 arquitectura se entra en la rejilla de generadores y porcentajes de datos

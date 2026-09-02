@@ -3,14 +3,15 @@
 #
 # Con los 4 pools sintéticos del notebook 02 (muestras conjuntas
 # `[retorno, features intradía]` sin condicionar), este notebook rellena
-# los **28 años sin barras de 5 min reales** de los 25 bancos del predictor:
+# los **~24 años sin barras de 5 min reales** (1996-05 → 2020-10) de los 25
+# bancos del predictor:
 # para cada día histórico se conoce el retorno diario REAL (Norgate) y se
 # le empareja, por "conditional matching" (vecino más cercano ponderado por
 # un kernel gaussiano sobre la distancia en retorno — ver
 # `src/backfill.py`), una muestra de features intradía del pool sintético
 # correspondiente.
 #
-# El resultado son 4 datasets completos de 30 años (2 reales + 28
+# El resultado son 4 datasets completos de 30 años (~5,5 reales + ~24,5
 # sintéticos), uno por generador, listos para la rejilla de entrenamiento
 # del notebook 04.
 
@@ -40,7 +41,7 @@ from src import backfill as bf, config, data_norgate as dn, features as feat, pl
 
 # %% [markdown]
 # ## 1. Cargar retornos reales (25 bancos, 30 años) y features intradía
-#    reales (últimos ~2 años)
+#    reales (desde 2020-11, ~5,5 años)
 
 # %%
 returns_predictor = pd.read_parquet(config.INTERIM_DIR / "returns_predictor.parquet")
@@ -87,22 +88,23 @@ for name, pool in synthetic_pools.items():
 # %% [markdown]
 # ## 4. Validación visual: la serie de volatilidad, 30 años, real + sintética
 #
-# Un banco de ejemplo (JPM): tramo sintético (28 años, gris) + tramo real
-# (2 años, color) para 3 generadores. Lo importante no es que la parte
-# sintética "acierte" día a día (es imposible sin datos reales), sino que
-# el NIVEL y la VARIABILIDAD sean coherentes con el tramo real — sin saltos
-# artificiales en el empalme.
+# Un banco de ejemplo (JPM): tramo sintético (~24 años, gris) + tramo real
+# (~5,5 años, color) para los 4 generadores. Lo importante no es que la
+# parte sintética "acierte" día a día (es imposible sin datos reales), sino
+# que el NIVEL y la VARIABILIDAD sean coherentes con el tramo real — sin
+# saltos artificiales en el empalme.
 
 # %%
 demo_ticker = "JPM"
-fig, axes = plt.subplots(3, 1, figsize=(11, 8), sharex=True)
-for ax, name in zip(axes, ["noise", "gaussian", "rbig"]):
+generadores_demo = [n for n in ["noise", "gaussian", "rbig", "gan"] if n in full_history_by_generator]
+fig, axes = plt.subplots(len(generadores_demo), 1, figsize=(11, 8 / 3 * len(generadores_demo)), sharex=True)
+for ax, name in zip(axes, generadores_demo):
     panel = full_history_by_generator[name][demo_ticker]
     is_synth = panel["is_synthetic"]
     ax.plot(panel.index[is_synth], panel.loc[is_synth, "realized_vol"],
-            color="#b7b6ae", linewidth=0.8, label="sintético (28 años)")
+            color="#b7b6ae", linewidth=0.8, label="sintético (~24 años)")
     ax.plot(panel.index[~is_synth], panel.loc[~is_synth, "realized_vol"],
-            color=pl.color_for(name), linewidth=0.8, label="real (2 años)")
+            color=pl.color_for(name), linewidth=0.8, label="real (~5,5 años)")
     ax.axvline(pd.Timestamp(config.REAL_INTRADAY_START_DATE), color="#52514e", linewidth=0.8, linestyle=":")
     ax.set_title(f"{demo_ticker} — volatilidad realizada diaria — generador: {name}", fontsize=10)
     ax.legend(frameon=False, fontsize=8, loc="upper left")
@@ -113,7 +115,7 @@ pl.savefig(fig, "03_backfill_serie_temporal_JPM")
 fig
 
 # %% [markdown]
-# ## 5. Comprobación de continuidad en el empalme (2 años reales / 28
+# ## 5. Comprobación de continuidad en el empalme (~5,5 años reales / ~24
 #    sintéticos)
 #
 # Para cada generador y cada banco, ratio entre el nivel medio de

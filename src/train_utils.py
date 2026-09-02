@@ -99,11 +99,11 @@ def slice_by_depth(
         a partir del cual se cuenta hacia atras cuanta historia SINTETICA
         se incluye. `synth_years=0` dejaria solo la ventana real disponible
         para entrenar (`synth_anchor` -> `train_end`, sin ningun dia
-        sintetico); `synth_years=28` anade ademas los 28 anios de backfill
+        sintetico); `synth_years=24` anade ademas los ~24 anios de backfill
         sintetico anteriores a `synth_anchor`.
 
-    (Ojo: la ventana real para ENTRENAR no son los ~2 anios completos de
-    REAL_INTRADAY_YEARS, porque VAL+TEST se comen el resto — ver
+    (Ojo: la ventana real para ENTRENAR no son los ~5.5 anios completos de
+    REAL_INTRADAY_YEARS, porque VAL+TEST se comen el final — ver
     config.SYNTH_DEPTH_YEARS_GRID.)
 
     Si se pasa `is_synthetic` (mascara booleana alineada con `idx`, True si
@@ -134,10 +134,10 @@ def slice_by_pct(
     sinteticos y reales", y el paso 5 pide ver "como meter mas o menos
     datos sinteticos modifica el comportamiento del modelo". Recortando por
     ANIOS de profundidad, la rejilla natural del problema
-    (`SYNTH_DEPTH_YEARS_GRID` = 0, 7, 14, 21, 28) cae en 0% y luego
-    87%-96%: cuatro puntos amontonados en el extremo alto y todo el tramo
-    intermedio sin muestrear. Parametrizando por porcentaje se cubre el eje
-    completo (0, 25, 50, 75, 90, 100%), que es justo el eje del que habla el
+    (`SYNTH_DEPTH_YEARS_GRID` = 0, 6, 12, 18, 24) cae en 0% y luego
+    ~57%-84%: sigue dejando sin muestrear todo el tramo 0-57%.
+    Parametrizando por porcentaje se cubre el eje completo
+    (0, 25, 50, 75, 90, 100%), que es justo el eje del que habla el
     enunciado.
 
     Las filas sinteticas se toman siempre las MAS RECIENTES (las contiguas

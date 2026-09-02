@@ -6,7 +6,8 @@
 # - **Retornos diarios reales** (hasta ~36 años, Norgate) para el universo
 #   reducido (25 bancos, backbone del predictor final) y el universo amplio
 #   (150 bancos, usado solo para entrenar los generadores con más datos).
-# - **Barras de 5 minutos reales** (EODHD, últimos ~2 años) y sus features
+# - **Barras de 5 minutos reales** (EODHD, desde 2020-11 — todo lo que sirve
+#   el API, ~5,5 años) y sus features
 #   intradía derivadas (volatilidad realizada, retorno de apertura/cierre,
 #   rango), para el universo amplio.
 #
@@ -17,7 +18,8 @@
 # **Por qué dos universos distintos** (`src/config.py`): el predictor final
 # necesita ~30 años de retorno diario REAL por banco (solo 25 bancos los
 # tienen completos en el dump de Norgate). Los generadores, en cambio, solo
-# necesitan datos de los últimos 2 años — así que para darles más muestras
+# necesitan datos de la ventana real (2020-11 en adelante) — así que para
+# darles más muestras
 # con las que aprender bien la distribución conjunta (retorno, features
 # intradía) se usan hasta 150 bancos, aunque no coticen desde 1990.
 
@@ -63,7 +65,8 @@ cobertura.to_csv(config.TABLES_DIR / "00_cobertura_predictor.csv")
 
 # %% [markdown]
 # Universo amplio (150 bancos), retorno diario real solo desde el inicio de
-# la ventana real de 2 años (es lo único que necesitan los generadores).
+# la ventana real (2020-11 en adelante, es lo único que necesitan los
+# generadores).
 
 # %%
 prices_generator = dn.load_daily_prices(

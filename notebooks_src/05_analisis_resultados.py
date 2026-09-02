@@ -77,7 +77,7 @@ pivot_dir.to_csv(config.TABLES_DIR / "05_tabla_precision_direccional.csv")
 mejora_pct.to_csv(config.TABLES_DIR / "05_tabla_mejora_pct.csv")
 
 print(
-    "Referencia 'solo reales' (synth_years=0, ~1 año real sin sintéticos): "
+    "Referencia 'solo reales' (synth_years=0, ~4,6 años reales sin sintéticos): "
     f"MAE {baseline_mae:.5f} | precisión direccional {baseline['directional_accuracy']:.1%}"
 )
 pivot_mae.round(5)

@@ -2,7 +2,7 @@
 v2 — Volatilidad REAL de 30 anios a partir del OHLC diario.
 
 El proyecto v1 asume que la volatilidad intradia solo se puede conocer con
-barras de 5 minutos, y por eso sintetiza los 28 anios que no las tienen.
+barras de 5 minutos, y por eso sintetiza los ~24 anios que no las tienen.
 Pero el dump de Norgate trae maximo y minimo DIARIOS reales de los 30 anios
 completos, y con eso se puede estimar la volatilidad con estimadores
 clasicos de rango:
@@ -121,7 +121,7 @@ def comparar_con_realizada(tickers: list[str] | None = None) -> pd.DataFrame:
 
 if __name__ == "__main__":
     print("Volatilidad de rango (OHLC diario real) vs volatilidad realizada (5 min)")
-    print("Ventana: donde existen ambas (~2 anios)\n")
+    print("Ventana: donde existen ambas (2020-11 en adelante, ~5.5 anios)\n")
     df = comparar_con_realizada()
     print(df.round(3).to_string())
     print("\nMEDIAS:")

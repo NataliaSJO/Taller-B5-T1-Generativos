@@ -4,7 +4,7 @@
 # Este notebook responde a la parte del enunciado que pide "estudiar la
 # distribución a lo largo del día" de los datos de 5 minutos, y justifica
 # **por qué** merece la pena rellenar con sintéticos la volatilidad
-# intradía en los 28 años sin barras de 5 min reales:
+# intradía en los ~24 años sin barras de 5 min reales:
 #
 # 1. El perfil de volatilidad/volumen a lo largo de la sesión tiene una
 #    forma muy característica (forma de "U": alta al abrir, baja a
@@ -46,9 +46,9 @@ from src import config, data_norgate as dn, features as feat, plotting as pl
 # ## 1. Datos: dos bancos de tamaño muy distinto
 #
 # JPM (money-center, muy líquido) vs. GBCI (banco regional pequeño), toda
-# la historia real de 5 minutos disponible en caché (~5-6 años; el
-# pipeline final solo usa los últimos 2, pero para el EDA usamos todo lo
-# que hay para tener una muestra más rica).
+# la historia real de 5 minutos disponible en caché (2020-11 → 2026-08,
+# ~5,8 años). Es la misma ventana que usa el pipeline como "real"; aquí no
+# se recorta val/test porque el EDA es descriptivo, no entrena nada.
 
 # %%
 tickers_demo = ["JPM", "GBCI"]
@@ -112,7 +112,7 @@ fig
 #
 # `realized_vol = sqrt(sum(retornos de 5 min ^ 2))` por sesión — el
 # estimador de volatilidad de referencia en microestructura, el que
-# necesitamos reconstruir sintéticamente para los 28 años sin 5 min reales.
+# necesitamos reconstruir sintéticamente para los ~24 años sin 5 min reales.
 
 # %%
 daily_feats = {tk: feat.daily_intraday_features(b) for tk, b in bars.items()}
@@ -174,6 +174,6 @@ pd.Series(corr_table, name="corr(|retorno diario|, realized_vol)").to_csv(
 print(
     "Correlacion moderada (no redundancia perfecta): la volatilidad intradia "
     "aporta informacion que el retorno diario, por si solo, no tiene — de ahi "
-    "que merezca la pena reconstruirla sinteticamente para los 28 anios sin "
+    "que merezca la pena reconstruirla sinteticamente para los ~24 anios sin "
     "5 minutos reales (notebook 03)."
 )

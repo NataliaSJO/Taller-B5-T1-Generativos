@@ -13,7 +13,7 @@ perturbandolas, sin aportar informacion nueva ninguna.
 Este experimento lo contrasta directamente: se cogen varios GAN que abarcan
 todo el rango de calidad distribucional (desde el mejor hasta el peor de la
 busqueda) y, para cada uno, se recorre el pipeline COMPLETO —
-entrenar GAN -> muestrear -> backfill de 28 anios -> entrenar el predictor —
+entrenar GAN -> muestrear -> backfill de ~24 anios -> entrenar el predictor —
 midiendo el rendimiento en el MISMO test real. Al final se correlaciona
 "calidad distribucional" con "utilidad aguas abajo".
 
@@ -81,7 +81,7 @@ def cargar_gans_del_espectro(n_buenas: int = 3) -> pd.DataFrame:
 
 def pipeline_completo(cfg: pd.Series, returns_pred, real_feats, pool_train,
                       X_val, Y_val, X_test, Y_test, idx_ref, epochs_pred: int):
-    """GAN -> muestreo -> backfill 28 anios -> predictor -> metricas test."""
+    """GAN -> muestreo -> backfill ~24 anios -> predictor -> metricas test."""
     g = gen.GANGenerator(
         latent_dim=int(cfg.latent_dim), epochs=int(cfg.epochs),
         batch_size=int(cfg.batch_size),

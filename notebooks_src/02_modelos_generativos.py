@@ -6,12 +6,12 @@
 # en `Material_clase/` en el README) sobre el **pool condicional**
 # construido en el notebook 00: muestras reales
 # `[retorno_diario, realized_vol, open_30m_ret, close_30m_ret, hl_range]`
-# de hasta 150 bancos en la ventana real de 2 años.
+# de hasta 150 bancos en la ventana real (2020-11 → 2025-06).
 #
 # Los 4 generadores son **incondicionales**: aprenden la distribución
 # conjunta `(retorno, features)` y solo saben muestrear pares nuevos de esa
 # conjunta. El paso de condicionar por el retorno diario YA CONOCIDO de cada
-# día histórico (para el backfill de los 28 años sin 5 min reales) se hace
+# día histórico (para el backfill de los ~24 años sin 5 min reales) se hace
 # aparte, en el notebook 03, con el mismo mecanismo de "conditional
 # matching" para los 4 — así la comparación del notebook 04 mide solo la
 # calidad de cada generador, no un truco de condicionamiento distinto.
@@ -218,7 +218,7 @@ corr_quality
 # %% [markdown]
 # ## 8. Guardar los pools sintéticos (`datos/interim/`, gitignored)
 #
-# El notebook 03 los usa para el backfill condicional de los 28 años sin
+# El notebook 03 los usa para el backfill condicional de los ~24 años sin
 # 5 minutos reales.
 
 # %%

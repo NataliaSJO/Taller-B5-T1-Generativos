@@ -23,9 +23,9 @@
 #    para decidir la arquitectura.
 #
 # **Sobre las fechas** (ver `src/config.py`): la ventana real de
-# `REAL_INTRADAY_YEARS` (~2 años) se reparte en train/val/test — val y test
-# se comen la mitad, así que lo que queda para entrenar "solo con reales"
-# es solo ~1 año (`synth_years=0`). A partir de ahí, `synth_years` cuenta
+# `REAL_INTRADAY_YEARS` (~5,5 años) se reparte en train/val/test — val y
+# test se comen el último año, así que lo que queda para entrenar "solo con
+# reales" son ~4,6 años (`synth_years=0`). A partir de ahí, `synth_years` cuenta
 # hacia atrás desde `REAL_INTRADAY_START_DATE` cuánta historia con
 # volatilidad SINTÉTICA se añade — el final del entrenamiento
 # (`VAL_START_DATE`) es siempre el mismo, no cambia con la profundidad.
@@ -118,8 +118,8 @@ print(f"val: {X_val.shape}   test: {X_test.shape}")
 # ## 3. Elegir arquitectura, usando SOLO la ventana real disponible
 #
 # `synth_years=0`: ni un solo día con volatilidad sintética todavía (ver
-# `train_utils.slice_by_depth`) — solo el ~1 año real que queda entre
-# `REAL_INTRADAY_START_DATE` y `VAL_START_DATE`.
+# `train_utils.slice_by_depth`) — solo los ~4,6 años reales que quedan entre
+# `REAL_INTRADAY_START_DATE` (2020-11) y `VAL_START_DATE` (2025-06).
 
 # %%
 X_full, Y_full, idx_full, is_synth_full = datasets_by_generator[ref_name]
@@ -257,9 +257,8 @@ fig
 # menos datos sintéticos modifica el comportamiento del modelo". La rejilla
 # de la sección anterior está expresada en **años** de historia recuperada
 # —que es la rejilla natural del problema financiero— pero traducida a
-# porcentaje cae en 0% y luego 87/93/95/96%: cuatro puntos amontonados en
-# el extremo alto, con todo el tramo 0-87% sin muestrear. Ahí no se puede
-# ver la forma de la curva.
+# porcentaje cae en 0% y luego ~57/72/80/84%: todo el tramo 0-57% queda sin
+# muestrear. Ahí no se puede ver la forma de la curva.
 #
 # Esta rejilla barre el eje de forma uniforme (`PCT_SYNTH_GRID`),
 # manteniendo **todas** las filas reales disponibles y añadiendo las

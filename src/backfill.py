@@ -3,7 +3,7 @@ Backfill condicional: dado el retorno diario REAL conocido de un dia
 historico (Norgate, hasta 30 anios), genera un vector de features intradia
 SINTETICO consistente con ese retorno, a partir de un pool de muestras
 conjuntas [retorno, features] generado por uno de los 4 generadores
-(src/generators.py) entrenados sobre la ventana real de 2 anios.
+(src/generators.py) entrenados sobre la ventana real (2020-11 en adelante).
 
 *** "Backfill" aqui NO es pandas `.bfill()` *** (que propaga hacia atras
 el SIGUIENTE valor conocido, usando datos del futuro para rellenar el
@@ -13,7 +13,7 @@ futuro, nunca el target) para consultar que feature intradia es plausible
 segun la relacion aprendida en la ventana real reciente. Ver README,
 seccion "Logica financiera", para el argumento completo de por que no hay
 fuga de informacion y por que un `.ffill()`/`.bfill()` literal seria peor
-(dejaria una volatilidad constante 28 anios, ciega a todas las crisis).
+(dejaria una volatilidad constante ~24 anios, ciega a todas las crisis).
 
 Los generadores de src/generators.py son todos INCONDICIONALES: aprenden la
 distribucion conjunta (retorno, features) y solo saben muestrear pares
@@ -92,7 +92,7 @@ def backfill_ticker_features(
     feature_cols: list[str] | None = None,
 ) -> pd.DataFrame:
     """Backfill de features intradia sinteticas para TODAS las fechas de
-    `real_returns` (retorno diario real de un ticker, ej. los 28 anios sin
+    `real_returns` (retorno diario real de un ticker, ej. los ~24 anios sin
     5 min reales), usando `synth_pool` (salida de un generador.sample(N))."""
     from .features import INTRADAY_FEATURE_COLS
 
@@ -113,6 +113,7 @@ def build_full_history_features(
 ) -> dict[str, pd.DataFrame]:
     """Construye, para cada ticker de `returns_by_ticker`, el panel completo
     de 30 anios de features intradia: REALES a partir de `real_start`
+    (2020-11-02: primera barra de 5 min que sirve EODHD)
     (usa `real_intraday_feats[ticker]`, calculado de barras de 5 min
     reales) y SINTETICAS (via `synth_pool`, la salida de un generador) antes
     de esa fecha. Devuelve {ticker: DataFrame con columna extra 'is_synthetic'}."""
