@@ -23,6 +23,20 @@ import pandas as pd
 from . import config
 
 
+def _set_training_seed(random_state: int | None) -> None:
+    """Fija la semilla antes de crear/entrenar un modelo, si se pide."""
+    if random_state is None:
+        return
+    seed = int(random_state)
+    np.random.seed(seed)
+    try:
+        import tensorflow as tf
+
+        tf.keras.utils.set_random_seed(seed)
+    except ImportError:
+        pass
+
+
 def mse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean((y_true - y_pred) ** 2))
 
@@ -251,21 +265,28 @@ def split_fold(
     return X_tr, Y_tr, X[val_mask], Y[val_mask], pct_synth
 
 
-def _make_early_stopping(patience: int | None):
-    """Callback de EarlyStopping (monitoriza val_loss, restaura los mejores
-    pesos). `patience` alto a proposito: hace falta ver el val_loss
-    estable durante muchas epocas seguidas (no solo dejar de mejorar un
-    par de epocas) para poder afirmar que el modelo ha convergido — que
-    es justo lo que tienen que mostrar las curvas de loss. `patience=None`
-    desactiva el early stopping (epochs fijas)."""
-    if patience is None:
+def _make_training_callbacks(early_stopping_patience: int | None):
+    """Callbacks de entrenamiento sobre `val_loss`.
+
+    ReduceLROnPlateau baja el learning rate cuando la validacion se estanca,
+    para que el optimizador pueda seguir afinando con pasos mas pequenos.
+    EarlyStopping mantiene un `patience` alto a proposito: hace falta ver el
+    val_loss estable durante muchas epocas seguidas para poder afirmar que el
+    modelo ha convergido. `early_stopping_patience=None` desactiva ambos
+    callbacks y deja epochs fijas."""
+    if early_stopping_patience is None:
         return []
     from tensorflow import keras
 
     return [
+        keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss", factor=0.5, patience=20, min_lr=1e-5
+        ),
         keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=patience, restore_best_weights=True
-        )
+            monitor="val_loss",
+            patience=early_stopping_patience,
+            restore_best_weights=True,
+        ),
     ]
 
 
@@ -362,6 +383,7 @@ def run_architecture_comparison(
     batch_size: int = 32,
     verbose: int = 0,
     early_stopping_patience: int | None = 100,
+    random_state: int | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Entrena cada arquitectura de `architectures` (dict nombre -> funcion
     factoria SIN argumentos que devuelve un modelo listo para `.fit`) sobre el
@@ -372,9 +394,12 @@ def run_architecture_comparison(
     parar (y quedarse con los mejores pesos vistos, no los ultimos) — mas
     rapido y menos sobreajuste que forzar siempre `epochs` fijas. `None` lo
     desactiva (fiel al notebook de clase, que entrena epochs fijas)."""
+    # `random_state` hace reproducible la inicializacion y el orden aleatorio
+    # de entrenamiento de cada arquitectura.
     rows = []
     histories = {}
     for name, factory in architectures.items():
+        _set_training_seed(random_state)
         model = factory()
         is_keras = hasattr(model, "compile")  # dense/cnn/rnn de src.modelos
         t0 = time.time()
@@ -384,7 +409,7 @@ def run_architecture_comparison(
                 X_train, Y_train,
                 epochs=epochs, batch_size=batch_size,
                 validation_data=(X_val, Y_val), verbose=verbose,
-                callbacks=_make_early_stopping(early_stopping_patience),
+                callbacks=_make_training_callbacks(early_stopping_patience),
             )
             histories[name] = hist.history
             X_val_eval = X_val
@@ -417,6 +442,7 @@ def run_depth_grid(
     verbose: int = 0,
     ticker_names: list[str] | None = None,
     early_stopping_patience: int | None = 100,
+    random_state: int | None = None,
     checkpoint_path=None,
     history_checkpoint_path=None,
     per_ticker_checkpoint_path=None,
@@ -453,6 +479,8 @@ def run_depth_grid(
     Los `*_checkpoint_path` son opcionales: si se pasan, cada combinacion
     terminada se guarda al momento y una ejecucion posterior salta las
     combinaciones que ya tengan fila, historial y desglose por banco."""
+    # Si se cambia `random_state`, los checkpoints existentes se reutilizan.
+    # Para recalcular con otra semilla, borrar o cambiar los checkpoint_path.
     value_col = "synth_years"
     rows, done = _load_rows_checkpoint(checkpoint_path, value_col)
     histories = _load_history_checkpoint(history_checkpoint_path)
@@ -483,11 +511,12 @@ def run_depth_grid(
             X_tr, Y_tr, _, pct_synth = slice_by_depth(
                 X_full, Y_full, idx_full, synth_years, train_end, synth_anchor, is_synth_full
             )
+            _set_training_seed(random_state)
             model = build_model_fn()
             hist = model.fit(
                 X_tr, Y_tr, epochs=epochs, batch_size=batch_size,
                 validation_data=(X_val, Y_val), verbose=verbose,
-                callbacks=_make_early_stopping(early_stopping_patience),
+                callbacks=_make_training_callbacks(early_stopping_patience),
             )
             metrics = evaluate_predictor(model, X_test, Y_test)
             rows.append(
@@ -522,6 +551,7 @@ def run_pct_grid(
     verbose: int = 0,
     ticker_names: list[str] | None = None,
     early_stopping_patience: int | None = 100,
+    random_state: int | None = None,
     checkpoint_path=None,
     history_checkpoint_path=None,
     per_ticker_checkpoint_path=None,
@@ -541,6 +571,8 @@ def run_pct_grid(
 
     Devuelve (tabla, historiales, por_ticker) con la misma forma que
     `run_depth_grid`, indexando por (generador, pct_objetivo)."""
+    # Si se cambia `random_state`, los checkpoints existentes se reutilizan.
+    # Para recalcular con otra semilla, borrar o cambiar los checkpoint_path.
     value_col = "pct_objetivo"
     rows, done = _load_rows_checkpoint(checkpoint_path, value_col)
     histories = _load_history_checkpoint(history_checkpoint_path)
@@ -571,11 +603,12 @@ def run_pct_grid(
             X_tr, Y_tr, _, pct_real = slice_by_pct(
                 X_full, Y_full, idx_full, pct, train_end, is_synth_full
             )
+            _set_training_seed(random_state)
             model = build_model_fn()
             hist = model.fit(
                 X_tr, Y_tr, epochs=epochs, batch_size=batch_size,
                 validation_data=(X_val, Y_val), verbose=verbose,
-                callbacks=_make_early_stopping(early_stopping_patience),
+                callbacks=_make_training_callbacks(early_stopping_patience),
             )
             metrics = evaluate_predictor(model, X_test, Y_test)
             rows.append(

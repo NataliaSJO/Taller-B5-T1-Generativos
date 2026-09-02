@@ -48,7 +48,15 @@
 # `EARLY_STOPPING_PATIENCE` epochs SEGUIDAS sin mejorar, así que cuando un
 # entrenamiento para, la curva de loss ya lleva un tramo largo y plano:
 # es la evidencia visual de convergencia que pide el enunciado, no solo
-# "dejó de mejorar hace poco".
+# "dejó de mejorar hace poco". Además, `ReduceLROnPlateau` baja el
+# learning rate cuando `val_loss` se estanca, para intentar que el modelo
+# siga afinando con pasos más pequeños antes de parar.
+
+#
+# **Sobre reproducibilidad**: se fija `RANDOM_STATE` y se reinicia antes de
+# cada entrenamiento. Asi, al comparar generadores/profundidades, todos los
+# modelos parten de la misma inicializacion aleatoria y las diferencias se
+# deben al dataset usado, no al azar del entrenamiento.
 
 # %%
 import sys
@@ -83,6 +91,7 @@ EPOCHS_REJILLA = 500
 BATCH_SIZE = 64
 EARLY_STOPPING_PATIENCE = 100
 LOSS_FUNCTION = "mae"
+RANDOM_STATE = 42
 
 # %% [markdown]
 # ## 1. Cargar los 4 datasets de 30 años (notebook 03)
@@ -157,6 +166,7 @@ arch_results, arch_histories = tu.run_architecture_comparison(
     architectures, X_train_arch, Y_train_arch, X_val, Y_val,
     epochs=EPOCHS_ARQUITECTURA, batch_size=BATCH_SIZE, verbose=0,
     early_stopping_patience=EARLY_STOPPING_PATIENCE,
+    random_state=RANDOM_STATE,
 )
 arch_results.to_csv(config.TABLES_DIR / "04_comparacion_arquitecturas.csv")
 arch_results.sort_values("mae")
@@ -226,6 +236,7 @@ results, histories, per_ticker = tu.run_depth_grid(
     synth_anchor=config.REAL_INTRADAY_START_DATE,
     epochs=EPOCHS_REJILLA, batch_size=BATCH_SIZE, verbose=0,
     early_stopping_patience=EARLY_STOPPING_PATIENCE,
+    random_state=RANDOM_STATE,
     ticker_names=config.PREDICTOR_TICKERS,
     checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad.csv",
     history_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad_histories.json",
@@ -279,6 +290,7 @@ results_pct, histories_pct, per_ticker_pct = tu.run_pct_grid(
     pct_grid=config.PCT_SYNTH_GRID, train_end=config.VAL_START_DATE,
     epochs=EPOCHS_REJILLA, batch_size=BATCH_SIZE, verbose=0,
     early_stopping_patience=EARLY_STOPPING_PATIENCE,
+    random_state=RANDOM_STATE,
     checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje.csv",
     history_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje_histories.json",
 )
