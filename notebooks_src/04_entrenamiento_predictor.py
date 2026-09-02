@@ -269,7 +269,9 @@ fig
 #
 # Misma arquitectura ganadora, mismos pesos reinicializados, mismo test
 # real — lo único que cambia entre versiones es la composición del
-# entrenamiento.
+# entrenamiento. Aquí no se calcula desglose por banco porque no se usa en
+# las salidas de porcentaje; así evitamos predicciones y checkpoints
+# auxiliares innecesarios.
 
 # %%
 results_pct, histories_pct, per_ticker_pct = tu.run_pct_grid(
@@ -277,10 +279,8 @@ results_pct, histories_pct, per_ticker_pct = tu.run_pct_grid(
     pct_grid=config.PCT_SYNTH_GRID, train_end=config.VAL_START_DATE,
     epochs=EPOCHS_REJILLA, batch_size=BATCH_SIZE, verbose=0,
     early_stopping_patience=EARLY_STOPPING_PATIENCE,
-    ticker_names=config.PREDICTOR_TICKERS,
     checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje.csv",
     history_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje_histories.json",
-    per_ticker_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje_por_banco.csv",
 )
 results_pct.to_csv(config.TABLES_DIR / "04_resultados_rejilla_porcentaje.csv")
 results_pct.sort_values(["generator", "pct_objetivo"])

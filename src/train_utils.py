@@ -137,7 +137,7 @@ def slice_by_pct(
     (`SYNTH_DEPTH_YEARS_GRID` = 0, 7, 14, 21, 28) cae en 0% y luego
     87%-96%: cuatro puntos amontonados en el extremo alto y todo el tramo
     intermedio sin muestrear. Parametrizando por porcentaje se cubre el eje
-    completo (0, 25, 50, 75, 90, 96%), que es justo el eje del que habla el
+    completo (0, 25, 50, 75, 90, 100%), que es justo el eje del que habla el
     enunciado.
 
     Las filas sinteticas se toman siempre las MAS RECIENTES (las contiguas

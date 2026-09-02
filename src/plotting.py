@@ -140,8 +140,8 @@ def plot_real_vs_synthetic_hist(real_values, synth_values, xlabel="", title="", 
 
 def plot_depth_grid_results(results, metric: str = "mae", ax=None):
     """A partir de la tabla que devuelve train_utils.run_depth_grid, dibuja
-    `metric` (test MAE/MSE) frente a `synth_years` (anios de backfill
-    sintetico anadidos), una linea por generador (color fijo por
+    `metric` (test MAE/MSE) frente a `synth_years` (años de backfill
+    sintetico añadidos), una linea por generador (color fijo por
     identidad, ver PALETTE)."""
     own_fig = ax is None
     if own_fig:
@@ -153,9 +153,9 @@ def plot_depth_grid_results(results, metric: str = "mae", ax=None):
             marker="o", markersize=5, linewidth=1.8,
             color=color_for(gen_name), label=gen_name,
         )
-    ax.set_xlabel("anios de backfill sintetico anadidos")
+    ax.set_xlabel("años de backfill sintetico añadidos")
     ax.set_ylabel(f"test {metric.upper()}")
-    ax.set_title(f"Predictor del dia siguiente: test {metric.upper()} vs. anios de sinteticos anadidos", fontsize=11)
+    ax.set_title(f"Predictor del dia siguiente: test {metric.upper()} vs. años de sinteticos añadidos", fontsize=11)
     ax.legend(frameon=False, title="generador")
     style_axes(ax)
     if own_fig:
