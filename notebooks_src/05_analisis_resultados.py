@@ -1,5 +1,5 @@
 # %% [markdown]
-# # 06 · Análisis de resultados
+# # 05 · Análisis de resultados
 #
 # Lee los resultados guardados por los notebooks 02 y 04 (no reentrena
 # nada) y construye las tablas/gráficas finales para el README y la
@@ -72,9 +72,9 @@ pivot_mae = pivot_con_baseline("mae")
 pivot_dir = pivot_con_baseline("directional_accuracy")
 mejora_pct = (baseline_mae - pivot_mae) / baseline_mae * 100
 
-pivot_mae.to_csv(config.TABLES_DIR / "06_tabla_mae_final.csv")
-pivot_dir.to_csv(config.TABLES_DIR / "06_tabla_precision_direccional.csv")
-mejora_pct.to_csv(config.TABLES_DIR / "06_tabla_mejora_pct.csv")
+pivot_mae.to_csv(config.TABLES_DIR / "05_tabla_mae_final.csv")
+pivot_dir.to_csv(config.TABLES_DIR / "05_tabla_precision_direccional.csv")
+mejora_pct.to_csv(config.TABLES_DIR / "05_tabla_mejora_pct.csv")
 
 print(
     "Referencia 'solo reales' (synth_years=0, ~4,6 años reales sin sintéticos): "
@@ -101,7 +101,7 @@ pivot_dir.round(4)
 
 # %%
 fig = pl.plot_depth_grid_results(results, metric="mae")
-pl.savefig(fig, "06_resultado_final_mae")
+pl.savefig(fig, "05_resultado_final_mae")
 fig
 
 # %% [markdown]
@@ -121,7 +121,7 @@ final_depth = (
     .join(corr_quality, how="left")
     .sort_values("mae")
 )
-final_depth.to_csv(config.TABLES_DIR / "06_tabla_generador_final.csv")
+final_depth.to_csv(config.TABLES_DIR / "05_tabla_generador_final.csv")
 final_depth
 
 # %%
@@ -135,7 +135,7 @@ ax.set_ylabel(f"test MAE con +{synth_max} años de sintéticos")
 ax.set_title("Calidad del generador vs. rendimiento final del predictor")
 pl.style_axes(ax)
 fig.tight_layout()
-pl.savefig(fig, "06_calidad_generador_vs_mae")
+pl.savefig(fig, "05_calidad_generador_vs_mae")
 fig
 
 # %% [markdown]
@@ -150,7 +150,7 @@ fig
 
 # %%
 fig = pl.plot_depth_grid_results(results, metric="directional_accuracy")
-pl.savefig(fig, "06_precision_direccional")
+pl.savefig(fig, "05_precision_direccional")
 fig
 
 # %%

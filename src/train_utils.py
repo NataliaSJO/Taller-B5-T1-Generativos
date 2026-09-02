@@ -273,10 +273,9 @@ def set_seed(seed: int | None = None) -> int:
     return seed
 
 
-def _make_early_stopping(patience: int | None, min_epochs: int = 0):
+def _make_early_stopping(patience: int | None):
     """Callback de EarlyStopping (monitoriza val_loss, restaura los mejores
-    pesos). `min_epochs` fuerza un minimo de epocas antes de que la parada
-    pueda dispararse. `patience` alto a proposito: hace falta ver el val_loss
+    pesos). `patience` alto a proposito: hace falta ver el val_loss
     estable durante muchas epocas seguidas (no solo dejar de mejorar un
     par de epocas) para poder afirmar que el modelo ha convergido — que
     es justo lo que tienen que mostrar las curvas de loss. `patience=None`
@@ -287,14 +286,7 @@ def _make_early_stopping(patience: int | None, min_epochs: int = 0):
 
     return [
         keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=patience, restore_best_weights=True,
-            # `start_from_epoch` retrasa SOLO la logica de parada: hasta la
-            # epoca `min_epochs` no se empieza a contar paciencia, asi que el
-            # entrenamiento corre al menos ese numero de epocas. El
-            # seguimiento del mejor val_loss sigue activo desde la epoca 0,
-            # de modo que `restore_best_weights` recupera el mejor GLOBAL,
-            # no el mejor a partir de `min_epochs`.
-            start_from_epoch=min_epochs,
+            monitor="val_loss", patience=patience, restore_best_weights=True
         )
     ]
 
