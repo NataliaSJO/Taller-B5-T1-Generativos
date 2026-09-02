@@ -214,6 +214,10 @@ def build_final_model():
 # comparación final de `Taller_con_Datos_SP500_promedio.ipynb`: una MAE
 # pooleada sobre los 25 bancos queda dominada por los de mayor volatilidad
 # (ver notebook 01, GBCI ~1.6x más volátil que JPM).
+#
+# La función guarda checkpoints en `datos/interim` tras cada combinación. Si
+# el notebook se interrumpe, al reejecutarlo salta las combinaciones ya
+# terminadas y continua desde la primera pendiente.
 
 # %%
 results, histories, per_ticker = tu.run_depth_grid(
@@ -223,6 +227,9 @@ results, histories, per_ticker = tu.run_depth_grid(
     epochs=EPOCHS_REJILLA, batch_size=BATCH_SIZE, verbose=0,
     early_stopping_patience=EARLY_STOPPING_PATIENCE,
     ticker_names=config.PREDICTOR_TICKERS,
+    checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad.csv",
+    history_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad_histories.json",
+    per_ticker_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad_por_banco.csv",
 )
 results.to_csv(config.TABLES_DIR / "04_resultados_rejilla_profundidad.csv")
 results.sort_values(["generator", "synth_years"])
@@ -271,6 +278,9 @@ results_pct, histories_pct, per_ticker_pct = tu.run_pct_grid(
     epochs=EPOCHS_REJILLA, batch_size=BATCH_SIZE, verbose=0,
     early_stopping_patience=EARLY_STOPPING_PATIENCE,
     ticker_names=config.PREDICTOR_TICKERS,
+    checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje.csv",
+    history_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje_histories.json",
+    per_ticker_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje_por_banco.csv",
 )
 results_pct.to_csv(config.TABLES_DIR / "04_resultados_rejilla_porcentaje.csv")
 results_pct.sort_values(["generator", "pct_objetivo"])

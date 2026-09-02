@@ -13,7 +13,9 @@ se pasan siempre como argumentos desde el notebook.
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -267,6 +269,89 @@ def _make_early_stopping(patience: int | None):
     ]
 
 
+def _grid_key(gen_name: str, value: float) -> tuple[str, float]:
+    return gen_name, float(value)
+
+
+def _history_to_lists(history: dict) -> dict:
+    return {name: [float(v) for v in values] for name, values in history.items()}
+
+
+def _history_key(gen_name: str, value: float) -> str:
+    return f"{gen_name}|{float(value):.12g}"
+
+
+def _load_rows_checkpoint(path, value_col: str) -> tuple[list[dict], set[tuple[str, float]]]:
+    if path is None or not Path(path).exists():
+        return [], set()
+    df = pd.read_csv(path)
+    rows = df.to_dict("records")
+    done = {_grid_key(row["generator"], row[value_col]) for row in rows}
+    return rows, done
+
+
+def _save_rows_checkpoint(rows: list[dict], path, sort_cols: list[str]) -> None:
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).sort_values(sort_cols).to_csv(path, index=False)
+
+
+def _load_history_checkpoint(path) -> dict:
+    if path is None or not Path(path).exists():
+        return {}
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    histories = {}
+    for key, history in raw.items():
+        gen_name, value = key.rsplit("|", 1)
+        histories[_grid_key(gen_name, value)] = history
+    return histories
+
+
+def _save_history_checkpoint(histories: dict, path) -> None:
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = {_history_key(gen, value): history for (gen, value), history in histories.items()}
+    path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+
+
+def _load_per_ticker_checkpoint(path, value_col: str) -> dict:
+    if path is None or not Path(path).exists():
+        return {}
+    df = pd.read_csv(path)
+    per_ticker = {}
+    for (gen_name, value), sub in df.groupby(["generator", value_col]):
+        per_ticker[_grid_key(gen_name, value)] = (
+            sub.drop(columns=["generator", value_col]).set_index("ticker")
+        )
+    return per_ticker
+
+
+def _save_per_ticker_checkpoint(per_ticker: dict, path, value_col: str) -> None:
+    if path is None or not per_ticker:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frames = []
+    for (gen_name, value), df in per_ticker.items():
+        out = df.reset_index().copy()
+        out.insert(0, value_col, value)
+        out.insert(0, "generator", gen_name)
+        frames.append(out)
+    pd.concat(frames, ignore_index=True).to_csv(path, index=False)
+
+
+def _drop_row(rows: list[dict], gen_name: str, value_col: str, value: float) -> list[dict]:
+    key = _grid_key(gen_name, value)
+    return [
+        row for row in rows
+        if _grid_key(row["generator"], row[value_col]) != key
+    ]
+
+
 def run_architecture_comparison(
     architectures: dict[str, callable],
     X_train: np.ndarray,
@@ -332,6 +417,9 @@ def run_depth_grid(
     verbose: int = 0,
     ticker_names: list[str] | None = None,
     early_stopping_patience: int | None = 100,
+    checkpoint_path=None,
+    history_checkpoint_path=None,
+    per_ticker_checkpoint_path=None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """Para cada generador de `datasets_by_generator` (nombre -> (X, Y, idx,
     is_synthetic) con el historico COMPLETO de 30 anios construido con el
@@ -360,10 +448,15 @@ def run_depth_grid(
     Devuelve (tabla_resultados, historiales, resultados_por_ticker) donde
     `historiales` mapea (generador, synth_years) -> history.history (curvas
     de loss) y `resultados_por_ticker` mapea (generador, synth_years) ->
-    DataFrame (25 filas) o {} si no se paso `ticker_names`."""
-    rows = []
-    histories = {}
-    per_ticker = {}
+    DataFrame (25 filas) o {} si no se paso `ticker_names`.
+
+    Los `*_checkpoint_path` son opcionales: si se pasan, cada combinacion
+    terminada se guarda al momento y una ejecucion posterior salta las
+    combinaciones que ya tengan fila, historial y desglose por banco."""
+    value_col = "synth_years"
+    rows, done = _load_rows_checkpoint(checkpoint_path, value_col)
+    histories = _load_history_checkpoint(history_checkpoint_path)
+    per_ticker = _load_per_ticker_checkpoint(per_ticker_checkpoint_path, value_col)
     ref_generator = next(iter(datasets_by_generator))
 
     for synth_years in synth_years_grid:
@@ -373,6 +466,20 @@ def run_depth_grid(
             else datasets_by_generator
         )
         for gen_name, (X_full, Y_full, idx_full, is_synth_full) in generators_this_depth.items():
+            key = _grid_key(gen_name, synth_years)
+            has_all_checkpoints = (
+                key in done
+                and key in histories
+                and (ticker_names is None or key in per_ticker)
+            )
+            if has_all_checkpoints:
+                print(f"[depth] saltando {gen_name}, synth_years={synth_years}: ya existe checkpoint")
+                continue
+            if key in done:
+                rows = _drop_row(rows, gen_name, value_col, synth_years)
+                done.discard(key)
+
+            print(f"[depth] entrenando {gen_name}, synth_years={synth_years}")
             X_tr, Y_tr, _, pct_synth = slice_by_depth(
                 X_full, Y_full, idx_full, synth_years, train_end, synth_anchor, is_synth_full
             )
@@ -389,13 +496,16 @@ def run_depth_grid(
                     "n_train": len(X_tr), "pct_synth": pct_synth, **metrics,
                 }
             )
-            histories[(gen_name, synth_years)] = hist.history
+            done.add(key)
+            histories[key] = _history_to_lists(hist.history)
             if ticker_names is not None:
-                per_ticker[(gen_name, synth_years)] = evaluate_predictor_per_ticker(
-                    model, X_test, Y_test, ticker_names
-                )
+                per_ticker[key] = evaluate_predictor_per_ticker(model, X_test, Y_test, ticker_names)
+            _save_rows_checkpoint(rows, checkpoint_path, [value_col, "generator"])
+            _save_history_checkpoint(histories, history_checkpoint_path)
+            _save_per_ticker_checkpoint(per_ticker, per_ticker_checkpoint_path, value_col)
+            print(f"[depth] checkpoint guardado: {len(rows)} filas")
 
-    return pd.DataFrame(rows), histories, per_ticker
+    return pd.DataFrame(rows).sort_values([value_col, "generator"]).reset_index(drop=True), histories, per_ticker
 
 
 def run_pct_grid(
@@ -412,6 +522,9 @@ def run_pct_grid(
     verbose: int = 0,
     ticker_names: list[str] | None = None,
     early_stopping_patience: int | None = 100,
+    checkpoint_path=None,
+    history_checkpoint_path=None,
+    per_ticker_checkpoint_path=None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """Igual que `run_depth_grid` pero recortando por PORCENTAJE de filas
     sinteticas (`slice_by_pct`) en vez de por anios de profundidad.
@@ -428,9 +541,10 @@ def run_pct_grid(
 
     Devuelve (tabla, historiales, por_ticker) con la misma forma que
     `run_depth_grid`, indexando por (generador, pct_objetivo)."""
-    rows = []
-    histories = {}
-    per_ticker = {}
+    value_col = "pct_objetivo"
+    rows, done = _load_rows_checkpoint(checkpoint_path, value_col)
+    histories = _load_history_checkpoint(history_checkpoint_path)
+    per_ticker = _load_per_ticker_checkpoint(per_ticker_checkpoint_path, value_col)
     ref_generator = next(iter(datasets_by_generator))
 
     for pct in pct_grid:
@@ -440,6 +554,20 @@ def run_pct_grid(
             else datasets_by_generator
         )
         for gen_name, (X_full, Y_full, idx_full, is_synth_full) in generators_this_pct.items():
+            key = _grid_key(gen_name, pct)
+            has_all_checkpoints = (
+                key in done
+                and key in histories
+                and (ticker_names is None or key in per_ticker)
+            )
+            if has_all_checkpoints:
+                print(f"[pct] saltando {gen_name}, pct={pct}: ya existe checkpoint")
+                continue
+            if key in done:
+                rows = _drop_row(rows, gen_name, value_col, pct)
+                done.discard(key)
+
+            print(f"[pct] entrenando {gen_name}, pct={pct}")
             X_tr, Y_tr, _, pct_real = slice_by_pct(
                 X_full, Y_full, idx_full, pct, train_end, is_synth_full
             )
@@ -456,10 +584,13 @@ def run_pct_grid(
                     "n_train": len(X_tr), "pct_synth": pct_real, **metrics,
                 }
             )
-            histories[(gen_name, pct)] = hist.history
+            done.add(key)
+            histories[key] = _history_to_lists(hist.history)
             if ticker_names is not None:
-                per_ticker[(gen_name, pct)] = evaluate_predictor_per_ticker(
-                    model, X_test, Y_test, ticker_names
-                )
+                per_ticker[key] = evaluate_predictor_per_ticker(model, X_test, Y_test, ticker_names)
+            _save_rows_checkpoint(rows, checkpoint_path, [value_col, "generator"])
+            _save_history_checkpoint(histories, history_checkpoint_path)
+            _save_per_ticker_checkpoint(per_ticker, per_ticker_checkpoint_path, value_col)
+            print(f"[pct] checkpoint guardado: {len(rows)} filas")
 
-    return pd.DataFrame(rows), histories, per_ticker
+    return pd.DataFrame(rows).sort_values([value_col, "generator"]).reset_index(drop=True), histories, per_ticker
