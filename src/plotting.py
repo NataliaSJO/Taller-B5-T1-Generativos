@@ -63,7 +63,7 @@ def plot_loss_history(history: dict, title: str = "", ax=None, color=None):
     if "val_loss" in history:
         ax.plot(history["val_loss"], label="val", color=c, linewidth=1.8, linestyle="--", alpha=0.7)
     ax.set_xlabel("epoch")
-    ax.set_ylabel("loss (MSE)")
+    ax.set_ylabel("loss (MAE)")
     ax.set_title(title, fontsize=10)
     ax.legend(frameon=False)
     style_axes(ax)
@@ -138,11 +138,25 @@ def plot_real_vs_synthetic_hist(real_values, synth_values, xlabel="", title="", 
     return ax
 
 
+# Nombre legible de cada metrica, para que los ejes no muestren el
+# identificador de Python ("directional_accuracy") ni mezclen mayusculas y
+# minusculas entre graficas que van juntas en el mismo informe.
+METRIC_LABELS = {
+    "mae": "MAE",
+    "mse": "MSE",
+    "directional_accuracy": "precisión direccional",
+}
+
+
+def metric_label(metric: str) -> str:
+    return METRIC_LABELS.get(metric, metric.replace("_", " "))
+
+
 def plot_depth_grid_results(results, metric: str = "mae", ax=None):
     """A partir de la tabla que devuelve train_utils.run_depth_grid, dibuja
-    `metric` (test MAE/MSE) frente a `synth_years` (años de backfill
-    sintetico añadidos), una linea por generador (color fijo por
-    identidad, ver PALETTE)."""
+    `metric` (test MAE/MSE/precision direccional) frente a `synth_years`
+    (años de backfill sintético añadidos), una linea por generador (color
+    fijo por identidad, ver PALETTE)."""
     own_fig = ax is None
     if own_fig:
         fig, ax = plt.subplots(figsize=(6.5, 4.2))
@@ -153,9 +167,12 @@ def plot_depth_grid_results(results, metric: str = "mae", ax=None):
             marker="o", markersize=5, linewidth=1.8,
             color=color_for(gen_name), label=gen_name,
         )
-    ax.set_xlabel("años de backfill sintetico añadidos")
-    ax.set_ylabel(f"test {metric.upper()}")
-    ax.set_title(f"Predictor del dia siguiente: test {metric.upper()} vs. años de sinteticos añadidos", fontsize=11)
+    ax.set_xlabel("años de backfill sintético añadidos")
+    ax.set_ylabel(f"test — {metric_label(metric)}")
+    ax.set_title(
+        f"Predictor del día siguiente: test {metric_label(metric)} "
+        "vs. años de sintéticos añadidos", fontsize=11,
+    )
     ax.legend(frameon=False, title="generador")
     style_axes(ax)
     if own_fig:

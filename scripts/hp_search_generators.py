@@ -237,7 +237,7 @@ def main():
     pool_full = np.load(config.INTERIM_DIR / "conditional_pool.npy")
     meta = pd.read_parquet(config.INTERIM_DIR / "conditional_pool_meta.parquet")
     pool = pool_full[~(meta["date"] >= pd.Timestamp(config.VAL_START_DATE)).values]
-    rng0 = np.random.default_rng(42)
+    rng0 = np.random.default_rng(config.RANDOM_SEED)
     shuffled = rng0.permutation(len(pool))
     n_val = max(int(0.1 * len(pool)), 500)
     pool_val, pool_train = pool[shuffled[:n_val]], pool[shuffled[n_val:]]

@@ -23,8 +23,13 @@ Resultado informativo gane quien gane:
     generadores por fidelidad distribucional seria enganoso, y habria que
     elegirlos por rendimiento aguas abajo.
 
+El predictor es EL MISMO que el de la rejilla del notebook 04 (arquitectura
+ganadora leida de 04_comparacion_arquitecturas.csv, con dropout/L2 y con la
+purga entre entrenamiento y validacion), para que esta tabla sea comparable
+con la de §6.4 del README.
+
 Uso:
-    python scripts/experimento_espectro_gan.py [--n-buenas 3] [--epochs 200]
+    python scripts/experimento_espectro_gan.py [--n-buenas 3]
 """
 
 from __future__ import annotations
@@ -47,6 +52,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from src import backfill as bf, config, features as feat, generators as gen  # noqa: E402
 from src import modelos, train_utils as tu  # noqa: E402
+
+# El predictor de este experimento tiene que ser EL MISMO que el del
+# notebook 04, no una CNN fija escrita a mano: si no, la tabla de §6.3 no es
+# comparable con la de §6.4 (otra arquitectura, sin regularizacion y sin
+# purga). Se reutiliza el constructor de la rejilla paralela, que ya lee la
+# arquitectura ganadora de 04_comparacion_arquitecturas.csv.
+from rejilla_paralela import (  # noqa: E402
+    EMBARGO_DAYS, TRAIN_END, arquitectura_ganadora, constructor,
+)
+
+DROPOUT, L2_REG = 0.3, 1e-4
 
 
 def cargar_gans_del_espectro(n_buenas: int = 3) -> pd.DataFrame:
@@ -80,22 +96,27 @@ def cargar_gans_del_espectro(n_buenas: int = 3) -> pd.DataFrame:
 
 
 def pipeline_completo(cfg: pd.Series, returns_pred, real_feats, pool_train,
-                      X_val, Y_val, X_test, Y_test, idx_ref, epochs_pred: int):
-    """GAN -> muestreo -> backfill ~24 anios -> predictor -> metricas test."""
+                      X_val, Y_val, X_test, Y_test, idx_ref, epochs_pred: int,
+                      build_predictor, batch_size: int, patience: int):
+    """GAN -> muestreo -> backfill ~24 anios -> predictor -> metricas test.
+
+    `build_predictor` viene de `rejilla_paralela.constructor`, asi que es
+    exactamente el modelo (arquitectura + regularizacion) que entrena la
+    rejilla del notebook 04."""
     g = gen.GANGenerator(
         latent_dim=int(cfg.latent_dim), epochs=int(cfg.epochs),
         batch_size=int(cfg.batch_size),
         gen_hidden=tuple(int(x) for x in str(cfg.gen_hidden).split("x")),
         disc_hidden=tuple(int(x) for x in str(cfg.disc_hidden).split("x")),
         learning_rate=float(cfg.learning_rate),
-        d_steps_per_g=int(cfg.d_steps_per_g), random_state=42,
+        d_steps_per_g=int(cfg.d_steps_per_g), random_state=config.RANDOM_SEED,
     )
     g.fit(pool_train)
     synth = feat.clip_nonnegative_pool_columns(g.sample(50_000))
 
     full = bf.build_full_history_features(
         returns_pred, real_feats, synth,
-        real_start=config.REAL_INTRADAY_START_DATE, k_neighbors=80, random_state=42,
+        real_start=config.REAL_INTRADAY_START_DATE, k_neighbors=80, random_state=config.RANDOM_SEED,
     )
     rv = bf.rv_panel_from_full_history(full)
     combinado = pd.concat(
@@ -107,16 +128,14 @@ def pipeline_completo(cfg: pd.Series, returns_pred, real_feats, pool_train,
 
     X_tr, Y_tr, _, pct = tu.slice_by_depth(
         X, Y, idx, synth_years=config.SYNTH_DEPTH_YEARS_GRID[-1],
-        train_end=config.VAL_START_DATE, synth_anchor=config.REAL_INTRADAY_START_DATE,
+        train_end=TRAIN_END, synth_anchor=config.REAL_INTRADAY_START_DATE,
         is_synthetic=np.asarray(idx < pd.Timestamp(config.REAL_INTRADAY_START_DATE)),
     )
-    modelo = modelos.build_predictor_cnn(
-        config.WINDOW_X_DAYS, X.shape[-1], config.N_PREDICTOR_TICKERS,
-        conv_filters=(64, 128, 128), loss="mae",
-    )
-    modelo.fit(X_tr, Y_tr, epochs=epochs_pred, batch_size=64,
+    tu.set_seed()
+    modelo = build_predictor()
+    modelo.fit(X_tr, Y_tr, epochs=epochs_pred, batch_size=batch_size,
                validation_data=(X_val, Y_val), verbose=0,
-               callbacks=tu._make_early_stopping(40))
+               callbacks=tu._make_early_stopping(patience))
     m = tu.evaluate_predictor(modelo, X_test, Y_test)
     del modelo, g
     from tensorflow import keras
@@ -128,7 +147,9 @@ def pipeline_completo(cfg: pd.Series, returns_pred, real_feats, pool_train,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n-buenas", type=int, default=3)
-    ap.add_argument("--epochs", type=int, default=200)
+    ap.add_argument("--epochs", type=int, default=500)
+    ap.add_argument("--batch-size", type=int, default=256)
+    ap.add_argument("--patience", type=int, default=20)
     args = ap.parse_args()
 
     sel = cargar_gans_del_espectro(args.n_buenas)
@@ -148,7 +169,7 @@ def main():
     pool_full = np.load(config.INTERIM_DIR / "conditional_pool.npy")
     meta = pd.read_parquet(config.INTERIM_DIR / "conditional_pool_meta.parquet")
     pool = pool_full[~(meta["date"] >= pd.Timestamp(config.VAL_START_DATE)).values]
-    rng0 = np.random.default_rng(42)
+    rng0 = np.random.default_rng(config.RANDOM_SEED)
     sh = rng0.permutation(len(pool))
     pool_train = pool[sh[max(int(0.1 * len(pool)), 500):]]
 
@@ -160,6 +181,12 @@ def main():
     tmask = idx_ref >= pd.Timestamp(config.REAL_TEST_HOLDOUT_START_DATE)
     X_val, Y_val, X_test, Y_test = Xr[vmask], Yr[vmask], Xr[tmask], Yr[tmask]
 
+    arch = arquitectura_ganadora()
+    build_predictor = constructor(arch, Xr.shape[-1], "mae", DROPOUT, L2_REG)
+    print(f"\npredictor: {arch} | dropout={DROPOUT} l2={L2_REG} "
+          f"| train hasta {TRAIN_END} (embargo {EMBARGO_DAYS}d) "
+          f"— mismo montaje que la rejilla del notebook 04\n")
+
     out_path = config.TABLES_DIR / "experimento_espectro_gan.csv"
     filas = []
     for _, cfg in sel.iterrows():
@@ -167,7 +194,8 @@ def main():
         try:
             m, pct, n_tr = pipeline_completo(
                 cfg, returns_pred, real_feats, pool_train,
-                X_val, Y_val, X_test, Y_test, idx_ref, args.epochs)
+                X_val, Y_val, X_test, Y_test, idx_ref, args.epochs,
+                build_predictor, args.batch_size, args.patience)
             filas.append({
                 "etiqueta": cfg.etiqueta, "mmd": cfg.mmd_mean,
                 "w1": cfg.wasserstein_mean_mean, "frobenius": cfg.frobenius_corr_mean,

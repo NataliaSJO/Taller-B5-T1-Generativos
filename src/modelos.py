@@ -15,6 +15,8 @@ lanzara un ImportError claro; en Google Colab funciona sin instalar nada.
 
 from __future__ import annotations
 
+import numpy as np
+
 try:
     from tensorflow import keras
     from tensorflow.keras import layers
@@ -55,8 +57,41 @@ class BaselinePredictor:
         return last_step
 
 
+class ConstantPredictor:
+    """Modelo NULO: ignora por completo la ventana X y predice siempre la
+    media por banco del conjunto de entrenamiento.
+
+    Es la referencia que de verdad importa al predecir retornos diarios. El
+    otro suelo (`BaselinePredictor`, repetir el retorno de ayer) es un mal
+    punto de comparacion: los retornos diarios son casi incorrelados en el
+    tiempo, asi que repetir el de ayer es ACTIVAMENTE peor que no predecir
+    nada, y hace que cualquier red parezca buena por contraste.
+
+    Una red que no bate a este modelo no ha aprendido ninguna senal: solo
+    ha aprendido el nivel medio. Con datos financieros diarios eso es el
+    resultado por defecto, no la excepcion, asi que conviene tenerlo
+    siempre en la tabla de comparacion."""
+
+    def __init__(self, agregador: str = "mean"):
+        if agregador not in ("mean", "median"):
+            raise ValueError("agregador debe ser 'mean' o 'median'")
+        self.agregador = agregador
+
+    def fit(self, X, Y):
+        f = np.mean if self.agregador == "mean" else np.median
+        self.constante_ = f(np.asarray(Y), axis=0)
+        return self
+
+    def predict(self, X):
+        return np.broadcast_to(self.constante_, (len(X), len(self.constante_))).copy()
+
+
 def build_predictor_baseline(output_dim: int | None = None) -> BaselinePredictor:
     return BaselinePredictor(output_dim=output_dim)
+
+
+def build_predictor_constant(agregador: str = "mean") -> ConstantPredictor:
+    return ConstantPredictor(agregador=agregador)
 
 
 def build_predictor_linear() -> LinearRegression:

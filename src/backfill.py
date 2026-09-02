@@ -45,7 +45,7 @@ def conditional_match_sample(
     query_returns: np.ndarray,
     k_neighbors: int = 50,
     bandwidth: float | None = None,
-    random_state: int = 42,
+    random_state: int = config.RANDOM_SEED,
 ) -> np.ndarray:
     """Para cada valor de `query_returns` (M,), busca en `pool` (N, 1+F)
     (columna 0 = retorno sintetico, columnas 1: = features) los
@@ -88,7 +88,7 @@ def backfill_ticker_features(
     real_returns: pd.Series,
     synth_pool: np.ndarray,
     k_neighbors: int = 50,
-    random_state: int = 42,
+    random_state: int = config.RANDOM_SEED,
     feature_cols: list[str] | None = None,
 ) -> pd.DataFrame:
     """Backfill de features intradia sinteticas para TODAS las fechas de
@@ -109,7 +109,7 @@ def build_full_history_features(
     synth_pool: np.ndarray,
     real_start: str = config.REAL_INTRADAY_START_DATE,
     k_neighbors: int = 50,
-    random_state: int = 42,
+    random_state: int = config.RANDOM_SEED,
 ) -> dict[str, pd.DataFrame]:
     """Construye, para cada ticker de `returns_by_ticker`, el panel completo
     de 30 anios de features intradia: REALES a partir de `real_start`

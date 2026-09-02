@@ -37,6 +37,8 @@ import numpy as np
 from scipy.stats import norm
 from sklearn.covariance import LedoitWolf
 
+from . import config
+
 
 class BaseGenerator:
     name = "base"
@@ -61,7 +63,7 @@ class NoiseGenerator(BaseGenerator):
 
     def __init__(self, sigma: float = 0.05, relative: bool = True,
                  noise_dist: str = "normal", df: float = 4.0,
-                 random_state: int = 42):
+                 random_state: int = config.RANDOM_SEED):
         """`noise_dist`: forma del ruido que se suma.
           - 'normal'    : ruido gaussiano (el de Taller_GANs.ipynb).
           - 'student_t' : ruido t-Student con `df` grados de libertad,
@@ -113,7 +115,7 @@ class GaussianGenerator(BaseGenerator):
 
     def __init__(self, shrinkage: bool = True, shrinkage_alpha: float | None = None,
                  shrinkage_target: str = "identity", marginal: str = "gaussian",
-                 random_state: int = 42):
+                 random_state: int = config.RANDOM_SEED):
         """`shrinkage_alpha`: si se da (0..1), se usa shrinkage MANUAL con
         esa intensidad hacia una diagonal escalada,
         `Sigma = (1-a)*S + a*media(diag(S))*I`, en vez de dejar que
@@ -215,7 +217,7 @@ class RBIGGenerator(BaseGenerator):
     name = "rbig"
 
     def __init__(self, n_iters: int = 15, grid_size: int = 300,
-                 rotation: str = "random", random_state: int = 42):
+                 rotation: str = "random", random_state: int = config.RANDOM_SEED):
         """`rotation`: que rotacion se aplica entre gaussianizaciones.
           - 'random': rotacion ortogonal aleatoria (via QR).
           - 'pca'   : rotacion a los componentes principales de los datos
@@ -335,7 +337,7 @@ class GANGenerator(BaseGenerator):
         disc_hidden=(128, 64),
         learning_rate: float = 1e-4,
         d_steps_per_g: int = 2,
-        random_state: int = 42,
+        random_state: int = config.RANDOM_SEED,
     ):
         self.latent_dim = latent_dim
         self.epochs = epochs
@@ -350,7 +352,10 @@ class GANGenerator(BaseGenerator):
         from . import modelos  # import perezoso: requiere tensorflow
         import tensorflow as tf
 
-        np.random.seed(self.random_state)
+        # Semilla completa (random + numpy + tensorflow): la inicializacion
+        # de los pesos del generador y del discriminador es de TF, asi que
+        # sembrar solo numpy no bastaba para reproducir el entrenamiento.
+        tf.keras.utils.set_random_seed(self.random_state)
         d = XY_flat.shape[1]
         XY_flat = XY_flat.astype("float32")
 
@@ -427,7 +432,14 @@ class GANGenerator(BaseGenerator):
         return self
 
     def sample(self, n_samples: int) -> np.ndarray:
-        noise = np.random.normal(0, 1, (n_samples, self.latent_dim))
+        # RNG propio sembrado con `random_state`, igual que los otros tres
+        # generadores. Antes usaba `np.random.normal`, es decir el estado
+        # GLOBAL de numpy: el resultado dependia de que mas hubiera
+        # consumido numeros aleatorios entre `fit()` y `sample()`, lo que
+        # hacia el muestreo no reproducible justo en el generador mas caro
+        # de reentrenar.
+        rng = np.random.default_rng(self.random_state)
+        noise = rng.normal(0, 1, (n_samples, self.latent_dim))
         synth_scaled = self.gen_.predict(noise, verbose=0)
         return synth_scaled * self.scale_  # deshace el reescalado de fit()
 

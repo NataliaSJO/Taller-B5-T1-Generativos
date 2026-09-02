@@ -77,7 +77,7 @@ rv_panel_by_generator = {}
 for name, pool in synthetic_pools.items():
     full_hist = bf.build_full_history_features(
         returns_predictor, real_intraday_feats, pool,
-        real_start=config.REAL_INTRADAY_START_DATE, k_neighbors=80, random_state=42,
+        real_start=config.REAL_INTRADAY_START_DATE, k_neighbors=80, random_state=config.RANDOM_SEED,
     )
     full_history_by_generator[name] = full_hist
     rv_panel_by_generator[name] = bf.rv_panel_from_full_history(full_hist)

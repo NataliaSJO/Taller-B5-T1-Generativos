@@ -251,9 +251,32 @@ def split_fold(
     return X_tr, Y_tr, X[val_mask], Y[val_mask], pct_synth
 
 
-def _make_early_stopping(patience: int | None):
+def set_seed(seed: int | None = None) -> int:
+    """Fija la semilla de `random`, `numpy` y TensorFlow de una sola vez.
+
+    Se llama JUSTO ANTES de construir cada modelo, no una vez al principio:
+    asi el resultado de una combinacion concreta no depende de cuantas se
+    hayan entrenado antes ni en que orden. Es lo que permite que
+    `scripts/rejilla_paralela.py` (que reparte las combinaciones entre 8
+    procesos, en orden distinto cada vez) de exactamente el mismo resultado
+    que recorrerlas en secuencia.
+
+    Devuelve la semilla usada, para poder registrarla en los resultados."""
+    seed = config.RANDOM_SEED if seed is None else seed
+    try:
+        from tensorflow import keras
+        keras.utils.set_random_seed(seed)  # random + numpy + tensorflow
+    except ImportError:
+        import random
+        random.seed(seed)
+        np.random.seed(seed)
+    return seed
+
+
+def _make_early_stopping(patience: int | None, min_epochs: int = 0):
     """Callback de EarlyStopping (monitoriza val_loss, restaura los mejores
-    pesos). `patience` alto a proposito: hace falta ver el val_loss
+    pesos). `min_epochs` fuerza un minimo de epocas antes de que la parada
+    pueda dispararse. `patience` alto a proposito: hace falta ver el val_loss
     estable durante muchas epocas seguidas (no solo dejar de mejorar un
     par de epocas) para poder afirmar que el modelo ha convergido — que
     es justo lo que tienen que mostrar las curvas de loss. `patience=None`
@@ -264,7 +287,14 @@ def _make_early_stopping(patience: int | None):
 
     return [
         keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=patience, restore_best_weights=True
+            monitor="val_loss", patience=patience, restore_best_weights=True,
+            # `start_from_epoch` retrasa SOLO la logica de parada: hasta la
+            # epoca `min_epochs` no se empieza a contar paciencia, asi que el
+            # entrenamiento corre al menos ese numero de epocas. El
+            # seguimiento del mejor val_loss sigue activo desde la epoca 0,
+            # de modo que `restore_best_weights` recupera el mejor GLOBAL,
+            # no el mejor a partir de `min_epochs`.
+            start_from_epoch=min_epochs,
         )
     ]
 
@@ -375,6 +405,7 @@ def run_architecture_comparison(
     rows = []
     histories = {}
     for name, factory in architectures.items():
+        set_seed()          # misma inicializacion para todas las candidatas
         model = factory()
         is_keras = hasattr(model, "compile")  # dense/cnn/rnn de src.modelos
         t0 = time.time()
@@ -480,6 +511,7 @@ def run_depth_grid(
                 done.discard(key)
 
             print(f"[depth] entrenando {gen_name}, synth_years={synth_years}")
+            set_seed()
             X_tr, Y_tr, _, pct_synth = slice_by_depth(
                 X_full, Y_full, idx_full, synth_years, train_end, synth_anchor, is_synth_full
             )
@@ -568,6 +600,7 @@ def run_pct_grid(
                 done.discard(key)
 
             print(f"[pct] entrenando {gen_name}, pct={pct}")
+            set_seed()
             X_tr, Y_tr, _, pct_real = slice_by_pct(
                 X_full, Y_full, idx_full, pct, train_end, is_synth_full
             )

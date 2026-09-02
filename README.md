@@ -7,15 +7,24 @@ modelos generativos distintos — para reconstruir los ~24 años anteriores de
 los que solo tenemos precio de cierre diario (Norgate).**
 
 **Resultado (§6-7, con los 6 notebooks ejecutados end-to-end sobre datos
-reales): sí ayuda, poco, y da igual con qué generador.** Añadir ~28 años
-de historia reconstruida sintéticamente sube la precisión direccional del
-predictor de ~50-51% a ~52-53% y baja el MAE ~0.3-0.5%. Pero el hallazgo
-más sólido es el negativo: tras **7.426 evaluaciones** optimizando la
-fidelidad distribucional de los generadores, un experimento controlado
-(§6.3) muestra que **esa fidelidad no predice la utilidad real** — variando
-la calidad del generador un factor 2.266×, el rendimiento final varía un
-0.64%. El GAN mejor optimizado no bate a añadir ruido gaussiano a datos
-reales.
+reales): no ayudan — y el porqué importa más que el resultado.** Con las
+redes correctamente regularizadas, las **38 configuraciones** de las dos
+rejillas (4 generadores × 5 profundidades, y × 6 porcentajes) caben en un
+rango de MAE de **0.000022**: el **3% de un error estándar**. Todas
+aterrizan en el mismo punto, y ese punto es el **predictor constante**
+—predecir la media por banco, sin mirar la ventana de entrada— que da
+0.011763 en test. Entrenar con 24 años de historia sintética da lo mismo
+que entrenar con 4,6 años reales, que da lo mismo que entrenar **sin un
+solo dato real** (`pct=1.0` → 0.011748).
+
+Este informe documenta además **cómo se llegó primero a la conclusión
+contraria**. Sin regularización las redes memorizaban el entrenamiento
+(hasta 344 parámetros por muestra de entrenamiento), y las diferencias
+entre configuraciones —que parecían decir "el Ruido gana", "los sintéticos
+mejoran un 0,3%"— eran diferencias en *cuánto sobreajustaba cada una*, no
+en cuánta señal extraía. Al impedir la memorización, esas diferencias
+desaparecieron: la amplitud de la rejilla cayó de 0.000396 a 0.000022. Ver
+§6.4.
 
 ## 1. El problema financiero
 
@@ -302,7 +311,7 @@ están citadas literalmente de `reports/tables/` y `reports/figures/`.
   conjunta.
 - **`02_calidad_correlacion_generadores.csv`**: distancia de Frobenius
   entre la matriz de correlación real y la sintética (menor = mejor) —
-  **Ruido 0.39 < Gaussiana 0.40 < RBIG 0.48 < GAN 1.27**. El GAN es aquí el
+  **Gaussiana 0.18 < RBIG 0.24 < Ruido 0.25 < GAN 1.64**. El GAN es aquí el
   que peor reproduce la correlación conjunta — pero **NO por una limitación
   inherente**: con los hiperparámetros que encuentra la búsqueda (§6.2) baja
   a **0.36**, a la altura de los demás. La primera versión de este informe
@@ -315,10 +324,24 @@ están citadas literalmente de `reports/tables/` y `reports/figures/`.
   **coherentes con crisis reales** (dot-com, financiera, COVID) porque el *conditional matching* usa el retorno diario
   REAL de esos días, no una serie inventada.
 - **`03_continuidad_empalme.csv`**: el nivel medio de volatilidad
-  sintética justo antes de 2024 es ~1.24-1.28× el nivel real justo
-  después — sin salto artificial.
+  sintética justo antes de 2020-11 es **1.17-1.30×** el nivel real justo
+  después (Gaussiana 1.17, RBIG 1.17, Ruido 1.20, GAN 1.30). Conviene ser
+  literal: un ratio de 1.0 sería "sin salto"; lo que hay es un sesgo
+  sistemático de nivel del 17-30%, más marcado en el GAN.
 
-### 6.2 Búsqueda de hiperparámetros de los generadores (7.426 evaluaciones)
+### 6.2 Búsqueda de hiperparámetros de los generadores
+
+> **Sobre el tamaño de la búsqueda.** Una versión anterior de este informe
+> titulaba esta sección "7.426 evaluaciones". Ese número contaba
+> *evaluaciones*, no cobertura: al agrupar por configuración distinta eran
+> 2.971 de Ruido, **3** de Gaussiana, **11** de RBIG y 707 de GAN — la
+> Gaussiana se evaluó 2.928 veces sobre un espacio de tres configuraciones.
+> La búsqueda actual, con el pool nuevo (141.065 filas en vez de 53.282),
+> son **512 evaluaciones**: Ruido 168, Gaussiana 158 (espacio completo),
+> RBIG 146 (espacio completo), GAN 40. Las conclusiones 2 y 3 de abajo
+> descansan sobre espacios barridos por completo; la 1, sobre 40
+> configuraciones de GAN en vez de 707, así que es la que menos apoyo
+> tiene ahora.
 
 Los generadores no se dejaron con los hiperparámetros de clase: se hizo una
 búsqueda aleatoria paralelizada sobre **arquitectura e hiperparámetros**,
@@ -331,31 +354,45 @@ Código en `scripts/hp_search_generators.py`; selección con la regla de
 
 | Generador | Configuración elegida | MMD | W1 | Frobenius |
 |---|---|---|---|---|
-| Ruido | σ=0.031, relativo, ruido **t-Student** (8 gl) | 0.000000 | 0.0281 | 0.322 |
-| Gaussiana | α=0.0035, marginal **`rank_gauss`** | 0.003674 | 0.0393 | 0.408 |
-| RBIG | **n_iters=100, grid=1000, rotación PCA** | 0.000000 | 0.0271 | 0.347 |
-| GAN | latent=48, 2000 ép., bs=64, lr=1e-3, **d_steps=5** | 0.001072 | 0.0852 | 0.362 |
+| Ruido | σ=0.019, relativo, ruido **t-Student** (4 gl) | 0.000000 | 0.0211 | 0.332 |
+| Gaussiana | sin shrinkage, marginal **`rank_gauss`** | 0.004142 | 0.0195 | 0.287 |
+| RBIG | **n_iters=100, grid=800, rotación PCA** | 0.000000 | 0.0225 | 0.144 |
+| GAN | latent=48, 2000 ép., bs=128, lr=3e-4, **d_steps=5** | 0.001516 | 0.0776 | 0.300 |
 
 Tres resultados que corrigen afirmaciones de la versión anterior de este
-informe:
+informe. Los tres se han **replicado** con la búsqueda nueva sobre el pool
+ampliado, con magnitudes distintas a las de entonces:
 
 1. **El colapso de modo del GAN era cuestión de hiperparámetros, no una
-   limitación inherente.** Con la configuración de clase, la distancia de
-   Frobenius era 1.27; con `d_steps_per_g=5` baja a **0.36**, a la altura
-   de RBIG. El parámetro decisivo resultó ser cuántos pasos de
-   discriminador se dan por cada paso de generador (W1 medio 1.20 con 1
-   paso → 0.27 con 5), y satura ahí: con 6 empeora.
-2. **La Gaussiana mejora 15× ajustándose a la cópula.** El marginal
-   `rank_gauss` (llevar cada columna a N(0,1) por su distribución
-   empírica, ajustar ahí la Normal y deshacer la transformación) aparece
-   en las cinco mejores configuraciones. La lectura financiera es limpia:
-   una Normal **no** puede representar las colas pesadas de los retornos,
-   pero **sí** su estructura de dependencia; separando ambas cosas, el
-   modelo gaussiano deja de ser el peor con diferencia.
-3. **RBIG tiene un óptimo, no mejora monótonamente.** Verificado
-   empíricamente: satura hacia 60-150 iteraciones y se **degrada** pasado
-   200 (W1 0.0292 → 0.0385 con 500), porque cada iteración añade error de
-   interpolación de la rejilla de cuantiles.
+   limitación inherente.** Con la configuración de clase la distancia de
+   Frobenius es 1.64; la mejor configuración de la búsqueda baja a **0.21**.
+   El parámetro decisivo es cuántos pasos de discriminador se dan por cada
+   paso de generador, y el efecto es monótono hasta saturar en 5:
+
+   | `d_steps_per_g` | 2 | 3 | 4 | **5** | 6 |
+   |---|---|---|---|---|---|
+   | W1 medio | 1.024 | 0.397 | 0.248 | **0.163** | 0.341 |
+   | Frobenius medio | 2.136 | 1.456 | 0.746 | **0.539** | 1.017 |
+
+2. **La Gaussiana mejora 8.8× en MMD ajustándose a la cópula.** El marginal
+   `rank_gauss` (llevar cada columna a N(0,1) por su distribución empírica,
+   ajustar ahí la Normal y deshacer la transformación) baja el MMD medio de
+   0.0771 a 0.0088 y el W1 medio de 0.304 a 0.019 — un factor 16 en este
+   último. La lectura financiera es limpia: una Normal **no** puede
+   representar las colas pesadas de los retornos, pero **sí** su estructura
+   de dependencia; separando ambas cosas, el modelo gaussiano deja de ser el
+   peor con diferencia.
+
+   Matiz que conviene no ocultar: `rank_gauss` mejora las marginales y el
+   MMD, pero **empeora** la distancia de Frobenius media (0.66 → 0.83). La
+   transformación de cópula ayuda a la forma de cada variable, no a la
+   matriz de correlación.
+
+3. **RBIG tiene un óptimo, no mejora monótonamente.** El W1 medio toca
+   fondo hacia 50-60 iteraciones (0.026) y vuelve a subir a 100 (0.036),
+   porque cada iteración añade error de interpolación de la rejilla de
+   cuantiles. (La búsqueda nueva no muestreó por encima de 100 iteraciones,
+   así que la degradación más allá de ese punto queda sin reverificar.)
 
 ### 6.3 El experimento clave: ¿predice la fidelidad la utilidad?
 
@@ -370,24 +407,27 @@ entrenar el predictor → medir en el **mismo test real**
 
 | GAN | MMD | test MAE | precisión direccional |
 |---|---|---|---|
-| buena_1 | 0.00046 | **0.011827** ← el peor | 50.2% |
-| buena_2 | 0.00107 | 0.011759 | 51.8% |
-| buena_3 | 0.00189 | 0.011773 | 52.1% |
-| **intermedia** | 0.38711 | **0.011753** ← el mejor | **52.8%** |
-| mala | 0.54060 | 0.011764 | 52.1% |
-| muy_mala | 1.04254 | 0.011760 | 52.1% |
+| buena_1 | 0.00111 | **0.011774** | 51.5% |
+| buena_2 | 0.00152 | 0.011761 | 51.9% |
+| buena_3 | 0.00185 | **0.011780** ← el peor | 51.2% |
+| intermedia | 0.03558 | 0.011769 | 52.5% |
+| **mala** | 0.30045 | **0.011753** ← el mejor | **52.9%** |
+| muy_mala | 0.89109 | 0.011769 | 52.0% |
 
-**El GAN con mejor fidelidad de los 725 evaluados da el peor resultado
-aguas abajo**, y el mejor resultado lo da uno con un MMD 840× peor. Las
-correlaciones de Spearman entre fidelidad y MAE salen **negativas**
-(MMD −0.37, Frobenius −0.70).
+**El mejor resultado aguas abajo lo da el GAN etiquetado como "malo"**, con
+un MMD 270× peor que el mejor. Pero la lectura correcta **no** es "peor
+generador, mejor predictor" — eso sería sobreinterpretar 6 puntos. Es esta:
+mientras el MMD varía un factor **800×**, todos los MAE caben en un
+**0.23%** de dispersión, y los seis rodean al predictor constante
+(0.011763). **La calidad distribucional del generador es irrelevante para
+el rendimiento final.**
 
-Ahora bien, la lectura correcta **no** es "peor generador, mejor
-predictor" — eso sería sobreinterpretar 6 puntos. Es esta: mientras el MMD
-varía un factor **2.266×**, todos los MAE caben en un **0.64%** de
-dispersión. Es decir, **la calidad distribucional del generador es
-prácticamente irrelevante para el rendimiento final**; las diferencias
-entre generadores están dentro del ruido.
+> ⚠️ Esta tabla es la única de §6 que sigue entrenando su predictor **sin
+> regularización** (`scripts/experimento_espectro_gan.py` construye una
+> `cnn_3bloques` sin dropout ni L2, en vez de la arquitectura y el `REG` del
+> notebook 04). No invalida la conclusión —la dispersión ya es
+> despreciable— pero para ser estrictamente comparable con §6.4 habría que
+> alinear ese script con el resto del pipeline.
 
 *¿Por qué?* Encaja con la limitación estructural documentada en §5.3: la
 volatilidad sintética se **deriva** del retorno real de cada día vía
@@ -404,46 +444,87 @@ memorización pura (copiar datos reales) y no generación.
 
 ### 6.4 El predictor del día siguiente: ¿ayudan los sintéticos?
 
-**Arquitectura ganadora** (`04_comparacion_arquitecturas.csv`): se elige
-entrenando cada candidata SOLO con la ventana real (~4,6 años)
-(`synth_years=0`) y comparando su MAE en **validación**, no en test. La
-tabla generada deja esto explícito con `split=validation`. Solo después de fijar esa
-arquitectura se entra en la rejilla de generadores y porcentajes de datos
-sintéticos, que sí se evalúa en el test real reservado.
+**No. Nada de lo que se prueba aquí bate a predecir una constante.**
 
-**Rejilla final** (`04_resultados_rejilla_profundidad.csv`,
-`05_tabla_generador_final.csv`), test MAE / precisión direccional con
-`+28` años de historia sintética añadida vs. solo la ventana real:
+#### El modelo nulo, que faltaba
 
-| Generador | MAE (+28 años) | Δ MAE vs. solo reales | Precisión direccional |
+La comparación de arquitecturas incluye ahora `constante`: predecir la media
+por banco del entrenamiento, ignorando por completo la ventana `X`. Es la
+referencia que importa. El otro suelo, `baseline`, repite el retorno del día
+anterior; como los retornos diarios son casi incorrelados en el tiempo, eso
+es *activamente* peor que no predecir nada, y compararse solo contra él hace
+que cualquier red parezca buena.
+
+`04_comparacion_arquitecturas.csv`, MAE en **validación**:
+
+| Modelo | MAE val | vs. constante | Precisión direccional |
 |---|---|---|---|
-| solo reales (`synth_years=0`) | 0.011789 | — | 51.4% |
-| **Ruido** | **0.011750** | **+0.33%** | **53.0%** |
-| GAN | 0.011762 | +0.23% | 52.0% |
-| Gaussiana | 0.011785 | +0.04% | 50.0% |
-| RBIG | 0.011959 | **−1.4%** (empeora) | 45.5% |
+| **rnn_1capa** | **0.011496** | −0.000014 | 53.1% |
+| rnn_2capas | 0.011497 | −0.000012 | 53.0% |
+| cnn_3bloques | 0.011498 | −0.000012 | 52.8% |
+| `constante` | 0.011509 | — | 52.8% |
+| cnn_1bloque | 0.011871 | +0.000362 ← peor que la constante | 51.7% |
+| dense | 0.012273 | +0.000764 ← peor que la constante | 50.1% |
+| `baseline` (repetir ayer) | 0.017142 | +0.005633 | 46.3% |
+| `linear` | 0.020827 | +0.009317 | 50.9% |
 
-**Lectura**: 3 de los 4 generadores igualan o mejoran ligeramente al modelo
-entrenado solo con datos reales — el Ruido (el modelo "simple" obligatorio
-del enunciado) gana por MAE y precisión direccional a `+28` años, y el GAN
-lo iguala en el punto intermedio (`synth_years=14`, 52.9% de precisión
-direccional, la mejor de toda la rejilla). La mejora en MAE es modesta
-(~0.3%: predecir el signo/magnitud del retorno diario de un banco líquido
-es un problema cercano a la eficiencia de mercado), pero la mejora en
-**precisión direccional es consistente y más fácil de interpretar**: pasar
-de 51.4% (solo reales) a ~53% con el generador adecuado es una ventaja
-real, aunque pequeña, sobre lanzar una moneda.
+La mejor red le gana a la constante por **0.000014**, el 2% de un error
+estándar. Dos de las cinco redes son peores que ella.
 
-**RBIG es la excepción, y es una excepción explicable, no ruido.** Es el
-único generador cuyo rendimiento se **degrada por debajo del baseline**
-según se añade profundidad, y también el que muestra la relación menos
-favorable entre calidad de reconstrucción de la distribución conjunta
-(notebook 02) y rendimiento final (`05_calidad_generador_vs_mae.png`): a
-pesar de tener mejor distancia de Frobenius que el GAN, da peor MAE final
-que los otros 3. Es exactamente el tipo de hallazgo que pide el paso 5 del
-enunciado ("comparar entre los distintos tipos de modelos generativos
-usados") — la calidad del generador importa, y no toda métrica de
-fidelidad distribucional predice igual de bien la utilidad río abajo.
+#### La regularización cambió el orden — y desenmascaró a la densa
+
+Antes de aplicar `dropout=0.3` y `l2=1e-4`, la `dense` marcaba 0.011579 y
+parecía competitiva. Con regularización marca 0.012273, la peor de las
+redes. Aquella cifra venía de un modelo con **394.009 parámetros
+entrenándose sobre 1.145 ventanas** —344 parámetros por muestra— que
+memorizaba el entrenamiento y del que `restore_best_weights` rescataba un
+punto afortunado de las primeras épocas. Al impedirle memorizar se ve su
+capacidad real de generalizar, que es peor que no predecir nada.
+
+La regularización también arregló las curvas de convergencia. En los 37
+entrenamientos de las rejillas, el `val_loss` sube ahora una **mediana del
++0.20%** tras su mínimo (máximo +0.85%), frente al **+7.4% de mediana y
++17.6% de máximo** sin regularizar. Ahora las curvas de
+`04_loss_curvas_*.png` muestran de verdad lo que el enunciado pide ver.
+
+#### Las dos rejillas
+
+`04_resultados_rejilla_profundidad.csv`, test MAE a máxima profundidad
+(+24 años sintéticos, 84% de filas sintéticas):
+
+| Generador | MAE test | vs. constante | Δ vs. solo reales |
+|---|---|---|---|
+| RBIG | 0.011753 | −0.08% | +0.05% |
+| Ruido | 0.011753 | −0.08% | +0.05% |
+| GAN | 0.011755 | −0.07% | +0.04% |
+| Gaussiana | 0.011766 | +0.02% | −0.06% |
+| solo reales (`synth_years=0`) | 0.011759 | −0.03% | — |
+| **`constante`** | **0.011763** | — | — |
+
+Toda la rejilla de profundidad cae entre 0.011744 y 0.011766 —**amplitud
+0.000022**— y la de porcentaje entre 0.011744 y 0.011768. Un error estándar,
+por bootstrap de días sobre el propio test, es **0.000698**: la amplitud
+completa de las 38 configuraciones es el **3% de un error estándar**.
+
+El caso límite es el más elocuente. `pct=1.0` entrena **sin una sola fila
+real** y da 0.011748-0.011757 — indistinguible de entrenar con todo real.
+Si el modelo aprendiera algo de los datos, quitarle todos los reales
+tendría que notarse. No se nota.
+
+#### Por qué el informe anterior decía lo contrario
+
+La versión previa de esta tabla daba "el Ruido gana con +0.33% de mejora" y
+"RBIG empeora un 1.4%". Aquellos números salían de modelos sin regularizar,
+y lo que medían era **cuánto sobreajustaba cada configuración**, no cuánta
+señal extraía: con 1.145-7.074 muestras y decenas de miles de parámetros,
+qué punto rescataba `restore_best_weights` dependía del azar de la
+inicialización. Al regularizar, la amplitud de la rejilla cayó de 0.000396
+a 0.000022 y el orden entre generadores se volvió intercambiable.
+
+Esa es la lección metodológica del proyecto, y es más valiosa que la
+respuesta a la pregunta original: **sin un modelo nulo en la tabla y sin
+control del sobreajuste, un pipeline de este tipo produce rankings de
+generadores que parecen significativos y no lo son.**
 
 ### 6.5 Cómo reproducir estos números
 
@@ -467,44 +548,51 @@ python scripts/experimento_espectro_gan.py                         # fidelidad v
 
 ## 7. Conclusiones
 
-**1. Sí, los datos sintéticos ayudan — poco, pero de forma consistente.**
-Entrenar con ~28 años de historia reconstruida sintéticamente mejora al
-modelo entrenado solo con el año real disponible: el MAE baja ~0.3-0.5% y
-la precisión direccional sube de ~50-51% a ~52-53%. La mejora en MAE es
-modesta y esperable (predecir el retorno diario de un banco líquido está
-cerca del límite de eficiencia de mercado), pero la de precisión
-direccional es más interpretable: pasar de "moneda al aire" a ~53% es una
-ventaja real, aunque pequeña.
+**1. Los datos sintéticos no ayudan, y el experimento lo demuestra con
+claridad.** Las 38 configuraciones caben en el 3% de un error estándar y
+todas coinciden con el predictor constante. El caso `pct=1.0` —entrenar sin
+una sola fila real— da el mismo resultado que entrenar con todo real: si el
+modelo estuviera aprendiendo algo de los datos, eso tendría que notarse.
 
-**2. Qué generador se use apenas importa — y ese es el hallazgo más
-sólido.** Es el resultado contraintuitivo de §6.3: variando la fidelidad
-distribucional del generador un factor 2.266×, el rendimiento final varía
-un 0.64%. Lo que aporta valor es **tener más contexto histórico con el que
-entrenar**, no la sofisticación del modelo generativo. Un GAN cuidadosamente
-optimizado no bate a añadir ruido gaussiano a datos reales.
+**2. La conclusión contraria del informe anterior venía de sobreajuste, no
+de señal.** Con redes de hasta 394.009 parámetros sobre 1.145 ventanas, las
+diferencias entre generadores medían cuánto memorizaba cada configuración.
+Al añadir `dropout=0.3` y `l2=1e-4`, la amplitud de la rejilla cayó de
+0.000396 a 0.000022 y el ranking se volvió intercambiable. **Ésta es la
+lección metodológica principal del trabajo**: sin modelo nulo en la tabla y
+sin control del sobreajuste, este tipo de pipeline produce rankings que
+parecen significativos y no lo son.
 
 **3. La explicación es estructural, no accidental.** La volatilidad
 sintética se deriva, por construcción, del retorno real conocido de cada
-día. Por muy bien que se imite la distribución conjunta, esa feature
-aporta poca información marginal más allá del canal de retorno que el
-modelo ya tiene. Es el límite del método de *conditional matching*, y
-conviene decirlo con claridad en vez de vender la mejora como algo que no
-es.
+día: su correlación con `|retorno|` es 0.452 en el tramo sintético frente a
+0.455 en el real — se reproduce la relación con fidelidad, y por eso mismo
+no aporta información nueva más allá del canal de retorno que el modelo ya
+tiene. Peor aún, el *conditional matching* muestrea cada día de forma
+independiente, así que **destruye la agrupación de volatilidad**: la
+autocorrelación a un día de la volatilidad realizada es **0.088 en el tramo
+sintético frente a 0.587 en el real**. Durante 24 de los 30 años, el segundo
+canal de entrada tiene una estructura temporal que ningún mercado produce.
 
-**4. Optimizar la métrica equivocada es un riesgo real, no teórico.** Se
-gastaron 7.426 evaluaciones optimizando fidelidad distribucional, y esa
-métrica resultó no predecir la utilidad. El caso extremo es el generador
-de Ruido: obtiene MMD ≈ 0 (fidelidad perfecta) simplemente **copiando**
-muestras reales — memorización, no generación. Sin el experimento de §6.3
-se habría elegido el generador por el criterio incorrecto sin saberlo.
+**4. La fidelidad distribucional no predice la utilidad.** Variando el MMD
+del GAN un factor 800×, el MAE final varía un 0.23% (§6.3). El caso extremo
+es el generador de Ruido, que obtiene MMD ≈ 0 simplemente **copiando**
+muestras reales y perturbándolas: fidelidad perfecta por memorización, no
+por generación. Elegir el generador por fidelidad habría sido elegirlo por
+el criterio equivocado.
 
-**5. Lo que sí mejoró de forma medible fue el proceso, no el resultado.**
-La búsqueda de hiperparámetros arregló problemas reales — el sobreajuste
-severo del predictor (curvas de validación divergentes), el colapso de
-modo del GAN (Frobenius 1.27 → 0.36), la Gaussiana ajustada a la cópula
-(15× mejor) — pero ninguna de esas mejoras se tradujo en un predictor
-mucho mejor. Es una lección honesta sobre dónde están los límites en este
-problema: no en el modelado generativo, sino en la señal disponible.
+**5. Sobre el tamaño de las búsquedas, con precisión.** Una versión anterior
+titulaba §6.2 "7.426 evaluaciones". Ese número contaba evaluaciones, no
+cobertura: la Gaussiana se evaluó 2.928 veces sobre un espacio de **tres**
+configuraciones, y RBIG 468 veces sobre **once**. Conviene reportar
+configuraciones distintas, no evaluaciones.
+
+**6. Lo que este trabajo no puede responder.** Con un test de 122 días y 25
+bancos que correlacionan 0.715 entre sí, el tamaño muestral efectivo está
+mucho más cerca de 122 observaciones que de 3.050. Un error estándar del MAE
+es 0.000698 — el 6% del propio MAE. Cualquier efecto menor que eso es
+indetectable con estos datos, y el efecto que buscábamos resultó ser al
+menos 30 veces más pequeño.
 
 ## 8. Estructura del repositorio
 

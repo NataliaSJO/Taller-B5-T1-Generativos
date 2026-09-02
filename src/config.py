@@ -209,6 +209,29 @@ SYNTH_DEPTH_YEARS_GRID = [0, 6, 12, 18, 24]
 PCT_SYNTH_GRID = [0.0, 0.25, 0.50, 0.75, 0.90, 1.0]
 
 # ---------------------------------------------------------------------------
+# Reproducibilidad
+# ---------------------------------------------------------------------------
+# Semilla unica de todo el proyecto. Se usa para inicializar los pesos de
+# cada red, para el muestreo de los 4 generadores y para el backfill
+# condicional.
+#
+# POR QUE HACE FALTA: las arquitecturas candidatas del notebook 04 empatan
+# dentro del 0.5% de un error estandar (las tres mejores separadas por
+# 0.000003 en MAE de validacion). Sin semilla fija, el orden entre ellas
+# cambia de una ejecucion a otra por el azar de la inicializacion de pesos
+# — se observo que la "ganadora" pasaba de rnn_1capa a rnn_2capas al
+# reejecutar sin cambiar nada relevante. Como esa eleccion condiciona todo
+# el resto del pipeline (las dos rejillas y el experimento del espectro),
+# tiene que ser reproducible.
+#
+# OJO: fijar la semilla hace el resultado REPRODUCIBLE, no ROBUSTO. Que dos
+# arquitecturas empaten sigue siendo cierto; lo unico que se elimina es que
+# el empate se resuelva de forma distinta cada vez. Para decidir entre
+# candidatas empatadas hay que promediar varias semillas o aplicar la regla
+# de un error estandar (ver scripts/analizar_hpsearch.py).
+RANDOM_SEED = 42
+
+# ---------------------------------------------------------------------------
 # Barras de 5 min
 # ---------------------------------------------------------------------------
 BARS_PER_SESSION = 78   # sesion NYSE/Nasdaq de 6.5h / 5 min
