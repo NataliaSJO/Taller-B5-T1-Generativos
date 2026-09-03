@@ -67,20 +67,20 @@ EMBARGO_DAYS = config.WINDOW_X_DAYS
 TRAIN_END = str((pd.Timestamp(config.VAL_START_DATE) - pd.Timedelta(days=EMBARGO_DAYS)).date())
 
 # Checkpoints canonicos que lee notebooks/04 (mismos nombres que el notebook)
-CANON = {
-    "depth": {
-        "rows": config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad.csv",
-        "hist": config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad_histories.json",
-        "tick": config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad_por_banco.csv",
-        "value_col": "synth_years",
-    },
-    "pct": {
-        "rows": config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje.csv",
-        "hist": config.INTERIM_DIR / "04_checkpoint_rejilla_porcentaje_histories.json",
-        "tick": None,  # el notebook 04 no pide desglose por banco en esta rejilla
-        "value_col": "pct_objetivo",
-    },
-}
+def _canon(rejilla: str, horizonte: int) -> dict:
+    """Rutas de los checkpoints canonicos. El horizonte 1 conserva los
+    nombres de siempre (es el caso base del notebook 04 y del README); los
+    demas llevan sufijo `_h7` / `_h30`."""
+    suf = "" if horizonte == config.WINDOW_Y_DAYS else f"_h{horizonte}"
+    if rejilla == "depth":
+        return {"rows": config.INTERIM_DIR / f"04_checkpoint_rejilla_profundidad{suf}.csv",
+                "hist": config.INTERIM_DIR / f"04_checkpoint_rejilla_profundidad{suf}_histories.json",
+                "tick": config.INTERIM_DIR / f"04_checkpoint_rejilla_profundidad{suf}_por_banco.csv",
+                "value_col": "synth_years"}
+    return {"rows": config.INTERIM_DIR / f"04_checkpoint_rejilla_porcentaje{suf}.csv",
+            "hist": config.INTERIM_DIR / f"04_checkpoint_rejilla_porcentaje{suf}_histories.json",
+            "tick": None,   # el notebook 04 no pide desglose por banco aqui
+            "value_col": "pct_objetivo"}
 
 
 # ---------------------------------------------------------------------------
@@ -96,33 +96,30 @@ def cargar_datasets(nombres: set[str]) -> dict:
         if name not in nombres or not path.exists():
             continue
         npz = np.load(path, allow_pickle=True)
-        out[name] = (
-            npz["X"].astype("float32"), npz["Y"].astype("float32"),
-            pd.DatetimeIndex(npz["idx"]), npz["is_synthetic"],
-        )
+        # Misma correccion que el notebook 04: `is_synthetic` del nb03 marca
+        # si el ULTIMO dia de la ventana es sintetico, no si ALGUNO lo es.
+        # Sin esto, 59 ventanas que arrastran dias sinteticos se cuentan como
+        # reales y `slice_by_pct` construye proporciones que no son las que
+        # dice (ver train_utils.ventana_contiene_sintetico).
+        out[name] = {
+            "X": npz["X"].astype("float32"),
+            "idx": pd.DatetimeIndex(npz["idx"]),
+            "is_synth": tu.ventana_contiene_sintetico(npz["is_synthetic"], config.WINDOW_X_DAYS),
+            "Y": {h: npz[f"Y_h{h}"].astype("float32") for h in config.HORIZONTES_DIAS},
+        }
     return out
 
 
-PARAMS_POR_ARQUITECTURA = {
-    "dense": 394_009, "cnn_1bloque": 197_889, "cnn_3bloques": 150_273,
-    "rnn_1capa": 38_465, "rnn_2capas": 143_681,
-}
+vista_horizonte = tu.vista_horizonte   # helper compartido con el notebook 04
 
 
 def arquitectura_ganadora() -> str:
-    """Misma regla que el notebook 04 (`ARQUITECTURA_RED`): entre las redes
-    que empatan dentro de UN ERROR ESTANDAR de la mejor MAE de validacion,
-    la que tiene menos parametros.
-
-    No basta con `idxmin()`: las tres mejores estan separadas por 0.000003
-    y el orden cambia entre ejecuciones, de modo que la rejilla podia acabar
-    entrenando rnn_2capas (4x mas lenta) en vez de rnn_1capa por puro azar
-    de la inicializacion."""
+    """La misma arquitectura que elige el notebook 04: entre las redes que
+    empatan dentro de UN ERROR ESTANDAR de la mejor MAE de validacion, la de
+    menos parametros. Se delega en `tu.elegir_por_una_ee` para que script y
+    notebook no puedan divergir."""
     tabla = pd.read_csv(config.TABLES_DIR / "04_comparacion_arquitecturas.csv", index_col=0)
-    redes = tabla.drop(index=["constante", "baseline", "linear"], errors="ignore")
-    se = redes["mae"].std() / max(len(redes) ** 0.5, 1)
-    empatadas = redes[redes["mae"] <= redes["mae"].min() + se]
-    return min(empatadas.index, key=lambda n: PARAMS_POR_ARQUITECTURA.get(n, 10**9))
+    return tu.elegir_por_una_ee(tabla)
 
 
 def constructor(nombre: str, n_channels: int, loss: str, dropout: float, l2: float):
@@ -152,14 +149,23 @@ def todas_las_combinaciones() -> list[dict]:
     o pct=0) los 4 generadores comparten dataset, asi que se entrena UNA
     sola vez con la etiqueta 'solo_reales'."""
     combos = []
-    for sy in config.SYNTH_DEPTH_YEARS_GRID:
-        gens = ["solo_reales"] if sy <= 0 else GENERADORES
-        for g in gens:
-            combos.append({"rejilla": "depth", "generator": g, "valor": float(sy)})
+    # La rejilla de PROFUNDIDAD se recorre para los tres horizontes: es la
+    # que responde a "cuantos anios de sintetico" y la que interesa comparar
+    # entre 1, 7 y 30 dias.
+    for h in config.HORIZONTES_DIAS:
+        for sy in config.SYNTH_DEPTH_YEARS_GRID:
+            gens = ["solo_reales"] if sy <= 0 else GENERADORES
+            for g in gens:
+                combos.append({"rejilla": "depth", "generator": g,
+                               "valor": float(sy), "horizonte": h})
+    # La de PORCENTAJE se queda en 1 dia: es el eje que pide literalmente el
+    # enunciado y multiplicarlo por 3 horizontes triplicaria el coste sin
+    # anadir un eje nuevo.
     for p in config.PCT_SYNTH_GRID:
         gens = ["solo_reales"] if p <= 0 else GENERADORES
         for g in gens:
-            combos.append({"rejilla": "pct", "generator": g, "valor": float(p)})
+            combos.append({"rejilla": "pct", "generator": g,
+                           "valor": float(p), "horizonte": config.WINDOW_Y_DAYS})
     return combos
 
 
@@ -202,36 +208,46 @@ def entrenar(worker: int, n_workers: int, patience: int, batch_size: int,
     datasets = cargar_datasets(necesarios)
     ref = GENERADORES[0]
 
-    X_ref, Y_ref, idx_ref, _ = datasets[ref]
-    val = (idx_ref >= pd.Timestamp(config.VAL_START_DATE)) & (idx_ref < pd.Timestamp(config.REAL_TEST_HOLDOUT_START_DATE))
-    tst = idx_ref >= pd.Timestamp(config.REAL_TEST_HOLDOUT_START_DATE)
-    X_val, Y_val, X_test, Y_test = X_ref[val], Y_ref[val], X_ref[tst], Y_ref[tst]
+    # val/test dependen del horizonte (cada uno pierde un numero distinto de
+    # ventanas al final), asi que se calculan una vez por horizonte.
+    vt = {}
+    for h in config.HORIZONTES_DIAS:
+        Xh, Yh, ih, _ = vista_horizonte(datasets[ref], h)
+        # Mismo helper que el notebook 04: excluye de validacion las
+        # ventanas cuyo objetivo (media de los h dias siguientes) se mete
+        # en el test.
+        (Xv, Yv), (Xt, Yt) = tu.split_val_test(Xh, Yh, ih, horizonte=h)
+        vt[h] = (Xv, Yv, Xt, Yt)
 
+    n_canales = datasets[ref]["X"].shape[-1]
     arch = arquitectura_ganadora()
-    build = constructor(arch, X_ref.shape[-1], loss, dropout, l2)
+    build = constructor(arch, n_canales, loss, dropout, l2)
     print(f"[w{worker}] {len(mis_combos)} combinaciones | arquitectura={arch} "
           f"| patience={patience} batch={batch_size} dropout={dropout} l2={l2} "
           f"| train hasta {TRAIN_END} (embargo {EMBARGO_DAYS}d)", flush=True)
 
     SHARD_DIR.mkdir(parents=True, exist_ok=True)
-    filas = {"depth": [], "pct": []}
-    historias = {"depth": {}, "pct": {}}
-    por_banco = {"depth": {}}
+    claves = {(c["rejilla"], c["horizonte"]) for c in mis_combos}
+    filas = {k: [] for k in claves}
+    historias = {k: {} for k in claves}
+    por_banco = {k: {} for k in claves if k[0] == "depth"}
 
     for i, combo in enumerate(mis_combos, 1):
         rejilla, gen, valor = combo["rejilla"], combo["generator"], combo["valor"]
+        horiz = combo["horizonte"]
         origen = ref if gen == "solo_reales" else gen
-        X_full, Y_full, idx_full, is_synth = datasets[origen]
+        X_full, Y_full, idx_full, is_synth = vista_horizonte(datasets[origen], horiz)
+        X_val, Y_val, X_test, Y_test = vt[horiz]
 
         if rejilla == "depth":
             X_tr, Y_tr, _, pct_synth = tu.slice_by_depth(
                 X_full, Y_full, idx_full, valor,
                 TRAIN_END, config.REAL_INTRADAY_START_DATE, is_synth)
-            fila_extra = {"synth_years": valor}
+            fila_extra = {"synth_years": valor, "horizonte": horiz}
         else:
             X_tr, Y_tr, _, pct_synth = tu.slice_by_pct(
                 X_full, Y_full, idx_full, valor, TRAIN_END, is_synth)
-            fila_extra = {"pct_objetivo": valor}
+            fila_extra = {"pct_objetivo": valor, "horizonte": horiz}
 
         t0 = time.time()
         # Misma semilla antes de cada modelo, igual que en run_depth_grid:
@@ -245,15 +261,19 @@ def entrenar(worker: int, n_workers: int, patience: int, batch_size: int,
             callbacks=tu._make_early_stopping(patience),
         )
         metrics = tu.evaluate_predictor(model, X_test, Y_test)
+        # SIN el horizonte en la clave: `run_depth_grid` busca (generador,
+        # valor) y el horizonte ya lo distingue el nombre del fichero. Si se
+        # mete aqui, el notebook no reconoce los checkpoints y reentrena todo.
         clave = tu._grid_key(gen, valor)
-        filas[rejilla].append({"generator": gen, **fila_extra,
-                               "n_train": len(X_tr), "pct_synth": pct_synth, **metrics})
-        historias[rejilla][clave] = tu._history_to_lists(hist.history)
+        k = (rejilla, horiz)
+        filas[k].append({"generator": gen, **fila_extra,
+                         "n_train": len(X_tr), "pct_synth": pct_synth, **metrics})
+        historias[k][clave] = tu._history_to_lists(hist.history)
         if rejilla == "depth":
-            por_banco["depth"][clave] = tu.evaluate_predictor_per_ticker(
+            por_banco[k][clave] = tu.evaluate_predictor_per_ticker(
                 model, X_test, Y_test, config.PREDICTOR_TICKERS)
 
-        print(f"[w{worker}] {i}/{len(mis_combos)} {rejilla} {gen} {valor} "
+        print(f"[w{worker}] {i}/{len(mis_combos)} {rejilla} h={horiz} {gen} {valor} "
               f"n={len(X_tr)} ep={len(hist.history['loss'])} "
               f"mae={metrics['mae']:.6f} ({time.time()-t0:.0f}s)", flush=True)
 
@@ -267,67 +287,76 @@ def entrenar(worker: int, n_workers: int, patience: int, batch_size: int,
 
 def _guardar_shard(worker: int, filas: dict, historias: dict, por_banco: dict) -> None:
     """Se guarda tras cada combinacion: si un worker muere, lo ya hecho no
-    se pierde y al relanzarlo el merge lo recoge igual."""
-    for rejilla in ("depth", "pct"):
-        if filas[rejilla]:
-            pd.DataFrame(filas[rejilla]).to_csv(SHARD_DIR / f"{rejilla}_rows_w{worker}.csv", index=False)
-        if historias[rejilla]:
-            (SHARD_DIR / f"{rejilla}_hist_w{worker}.json").write_text(
-                json.dumps({f"{g}|{float(v):.12g}": h for (g, v), h in historias[rejilla].items()}),
-                encoding="utf-8")
-    if por_banco["depth"]:
+    se pierde y al relanzarlo el merge lo recoge igual. Un shard por
+    (rejilla, horizonte) y worker."""
+    for (rejilla, h), fs in filas.items():
+        if fs:
+            pd.DataFrame(fs).to_csv(SHARD_DIR / f"{rejilla}_h{h}_rows_w{worker}.csv", index=False)
+    for (rejilla, h), hs in historias.items():
+        if hs:
+            (SHARD_DIR / f"{rejilla}_h{h}_hist_w{worker}.json").write_text(
+                json.dumps({f"{g}|{float(v):.12g}": x for (g, v), x in hs.items()}), encoding="utf-8")
+    for (rejilla, h), pb in por_banco.items():
+        if not pb:
+            continue
         marcos = []
-        for (gen, valor), df in por_banco["depth"].items():
+        for (gen, valor), df in pb.items():
             out = df.reset_index().copy()
             out.insert(0, "synth_years", valor)
-            out.insert(0, "generator", gen)
+            out.insert(0, "generator", gen.split("|")[0])
             marcos.append(out)
         pd.concat(marcos, ignore_index=True).to_csv(
-            SHARD_DIR / f"depth_tick_w{worker}.csv", index=False)
+            SHARD_DIR / f"{rejilla}_h{h}_tick_w{worker}.csv", index=False)
 
 
 # ---------------------------------------------------------------------------
 # Consolidacion
 # ---------------------------------------------------------------------------
 def merge() -> None:
+    """Consolida los shards de todos los workers en los checkpoints
+    canonicos, uno por (rejilla, horizonte)."""
     if not SHARD_DIR.exists():
         print("No hay shards que consolidar."); return
 
-    for rejilla, meta in CANON.items():
-        value_col = meta["value_col"]
+    combos = todas_las_combinaciones()
+    claves = sorted({(c["rejilla"], c["horizonte"]) for c in combos})
+    total_ok = 0
+    for rejilla, h in claves:
+        meta = _canon(rejilla, h)
+        vcol = meta["value_col"]
 
-        shards = sorted(SHARD_DIR.glob(f"{rejilla}_rows_w*.csv"))
+        shards = sorted(SHARD_DIR.glob(f"{rejilla}_h{h}_rows_w*.csv"))
         if shards:
             df = pd.concat([pd.read_csv(f) for f in shards], ignore_index=True)
-            df = df.drop_duplicates(subset=["generator", value_col], keep="last")
-            df = df.sort_values([value_col, "generator"]).reset_index(drop=True)
+            df = df.drop_duplicates(subset=["generator", vcol], keep="last")
+            df = df.sort_values([vcol, "generator"]).reset_index(drop=True)
             df.to_csv(meta["rows"], index=False)
-            print(f"[merge] {rejilla}: {len(df)} filas -> {meta['rows'].name}")
+            total_ok += len(df)
+            print(f"[merge] {rejilla} h={h}: {len(df)} filas -> {meta['rows'].name}")
 
-        hist_shards = sorted(SHARD_DIR.glob(f"{rejilla}_hist_w*.json"))
-        if hist_shards:
+        hs = sorted(SHARD_DIR.glob(f"{rejilla}_h{h}_hist_w*.json"))
+        if hs:
             fusion = {}
-            for f in hist_shards:
-                fusion.update(json.loads(f.read_text(encoding="utf-8")))
+            for f in hs:
+                for k, v in json.loads(f.read_text(encoding="utf-8")).items():
+                    # normaliza el formato antiguo "gen|hN|valor" -> "gen|valor"
+                    partes = k.split("|")
+                    if len(partes) == 3 and partes[1].startswith("h"):
+                        k = f"{partes[0]}|{partes[2]}"
+                    fusion[k] = v
             meta["hist"].write_text(json.dumps(fusion, indent=2), encoding="utf-8")
-            print(f"[merge] {rejilla}: {len(fusion)} historiales -> {meta['hist'].name}")
+            print(f"[merge] {rejilla} h={h}: {len(fusion)} historiales")
 
         if meta["tick"] is not None:
-            tick_shards = sorted(SHARD_DIR.glob(f"{rejilla}_tick_w*.csv"))
-            if tick_shards:
-                df = pd.concat([pd.read_csv(f) for f in tick_shards], ignore_index=True)
-                df = df.drop_duplicates(subset=["generator", value_col, "ticker"], keep="last")
+            ts = sorted(SHARD_DIR.glob(f"{rejilla}_h{h}_tick_w*.csv"))
+            if ts:
+                df = pd.concat([pd.read_csv(f) for f in ts], ignore_index=True)
+                df = df.drop_duplicates(subset=["generator", vcol, "ticker"], keep="last")
                 df.to_csv(meta["tick"], index=False)
-                print(f"[merge] {rejilla}: desglose por banco -> {meta['tick'].name}")
 
-    esperadas = len(todas_las_combinaciones())
-    hechas = sum(
-        len(pd.read_csv(CANON[r]["rows"])) for r in CANON if CANON[r]["rows"].exists()
-    )
-    print(f"\n[merge] {hechas}/{esperadas} combinaciones consolidadas.")
-    if hechas < esperadas:
-        print("[merge] AVISO: faltan combinaciones; relanza los workers que fallaron "
-              "(el notebook 04 entrenaria las que falten al ejecutarse).")
+    print(f"\n[merge] {total_ok}/{len(combos)} combinaciones consolidadas.")
+    if total_ok < len(combos):
+        print("[merge] AVISO: faltan combinaciones; relanza los workers que fallaron.")
 
 
 def main() -> None:
@@ -338,8 +367,8 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--epochs", type=int, default=500)
     ap.add_argument("--loss", default="mae")
-    ap.add_argument("--dropout", type=float, default=0.3)
-    ap.add_argument("--l2", type=float, default=1e-4)
+    ap.add_argument("--dropout", type=float, default=0.5)
+    ap.add_argument("--l2", type=float, default=1e-3)
     ap.add_argument("--merge", action="store_true")
     ap.add_argument("--plan", action="store_true", help="muestra el reparto y sale")
     args = ap.parse_args()

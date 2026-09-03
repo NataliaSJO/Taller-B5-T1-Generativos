@@ -62,7 +62,7 @@ from rejilla_paralela import (  # noqa: E402
     EMBARGO_DAYS, TRAIN_END, arquitectura_ganadora, constructor,
 )
 
-DROPOUT, L2_REG = 0.3, 1e-4
+DROPOUT, L2_REG = 0.5, 1e-3   # mismos que el notebook 04
 
 
 def cargar_gans_del_espectro(n_buenas: int = 3) -> pd.DataFrame:

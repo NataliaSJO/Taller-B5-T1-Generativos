@@ -180,6 +180,17 @@ REAL_TEST_HOLDOUT_START_DATE = "2025-12-01"
 WINDOW_X_DAYS = 60
 WINDOW_Y_DAYS = 1
 
+# Horizontes de prediccion que se comparan en el notebook 04. El enunciado
+# no exige ninguno ("los datos son a eleccion de los estudiantes"), y la
+# dificultad cambia mucho entre ellos: el ruido del target baja con la raiz
+# del horizonte mientras la deriva se mantiene, asi que la relacion
+# ruido/senal pasa de 92x a 1 dia, a 38x a 7 dias y a 15x a 30 dias.
+#
+# Los tres comparten EXACTAMENTE las mismas ventanas de entrada X; lo unico
+# que cambia es el target, de modo que la comparacion entre horizontes aisla
+# el efecto del horizonte y nada mas.
+HORIZONTES_DIAS = [1, 7, 30]
+
 # Rejilla de "profundidad": anios de backfill SINTETICO incluidos ANTES de
 # REAL_INTRADAY_START_DATE, usada en el notebook 04 para comparar "con vs.
 # sin sinteticos". El entrenamiento SIEMPRE termina en VAL_START_DATE (fijo,
@@ -191,7 +202,7 @@ WINDOW_Y_DAYS = 1
 # ~= 4.6 anios (2020-11 -> 2025-06). synth_years=0 -> solo esos ~4.6 anios
 # reales, sin ningun dia sintetico; synth_years=24 -> + todo el backfill
 # sintetico disponible (1996-05 -> 2020-10, ~24.4 anios).
-SYNTH_DEPTH_YEARS_GRID = [0, 6, 12, 18, 24]
+SYNTH_DEPTH_YEARS_GRID = [0, 1, 2, 5, 10, 24]
 
 # Rejilla de PORCENTAJE de filas sinteticas, la que responde literalmente al
 # paso 3 del enunciado ("datasets que tengan distinto porcentaje de datos

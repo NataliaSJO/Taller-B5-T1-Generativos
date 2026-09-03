@@ -11,6 +11,17 @@ N=${1:-10}
 PY=${2:-python}
 cd "$(dirname "$0")/.."
 
+# Cerrojo: dos lanzamientos simultaneos ponen el doble de procesos que
+# nucleos hay y ademas se pisan los shards. Paso de verdad durante el
+# desarrollo (16 workers en 10 nucleos), asi que la segunda invocacion
+# aborta en vez de duplicar el trabajo.
+LOCK=datos/interim/.lock_rejilla
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "Ya hay una ejecucion en curso ($LOCK). Si no es asi, borra ese directorio."
+  exit 1
+fi
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+
 echo "=== reparto previsto ==="
 $PY scripts/rejilla_paralela.py --plan --n-workers $N
 

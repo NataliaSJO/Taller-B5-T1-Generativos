@@ -11,21 +11,30 @@ mide si entrenar con esa historia reconstruida mejora al predictor. Todo el
 recorrido —descarga, EDA, generadores, backfill, entrenamiento, análisis—
 está ejecutado de punta a punta sobre datos reales.
 
-**Qué se encontró.** No mejora. Con las redes correctamente regularizadas,
-las **38 configuraciones** de las dos rejillas (4 generadores × 5
-profundidades, y × 6 porcentajes) caben en un rango de MAE de **0.000032**:
-menos del **5 % de un error estándar**. Todas aterrizan en el mismo punto, y
-ese punto es el **predictor constante** —predecir la media por banco, sin
-mirar la ventana de entrada— que da 0.011762 en test. Entrenar con 24 años
-de historia sintética da lo mismo que entrenar con 4,6 años reales, que da
-lo mismo que entrenar **sin un solo dato real** (`pct=1.0` → 0.011756).
+**Qué se encontró.** No mejora de forma significativa. Con las redes
+correctamente regularizadas, las **42 configuraciones** de las dos rejillas
+a un día (4 generadores × 5 profundidades, y × 5 porcentajes, más las dos
+referencias sin sintéticos) caben en un rango de MAE de **0.000043**: el
+**6 % de un error estándar**. Todas aterrizan prácticamente en el mismo
+punto, y ese punto es el **predictor constante** —predecir la media por
+banco, sin mirar la ventana de entrada— que da 0.011770 en test. Entrenar
+con 24 años de historia sintética da lo mismo que entrenar con los 4,2 años
+reales limpios, que da lo mismo que entrenar **sin un solo dato real**
+(`pct=1.0` → 0.011760).
+
+La rejilla se repite además a **7 y 30 días** de horizonte (84
+combinaciones en total). Ahí sí aparece una tendencia ordenada: añadir 10
+años de backfill mejora un 0,07 % a un día, un 0,85 % a siete y un
+**3,50 %** a treinta. Pero incluso el mejor caso queda a **0,48 errores
+estándar** de la constante, o sea por debajo del umbral a partir del cual
+la diferencia sería distinguible del ruido (§6.4).
 
 **Y cómo se llegó ahí.** La primera vuelta del pipeline decía lo contrario.
 Sin regularización, las redes memorizaban el entrenamiento (hasta 344
 parámetros por muestra) y las diferencias entre configuraciones —que
 parecían decir "el Ruido gana", "los sintéticos mejoran un 0,3 %"— medían
 *cuánto sobreajustaba cada una*, no cuánta señal extraía. Al impedir la
-memorización, la amplitud de la rejilla cayó de 0.000396 a 0.000032 y el
+memorización, la amplitud de la rejilla cayó de 0.000396 a 0.000043 y el
 orden entre generadores se volvió intercambiable. Ese recorrido está
 documentado en §6, porque la lección metodológica vale más que la respuesta
 a la pregunta original.
@@ -134,8 +143,11 @@ a la pregunta original.
     ├── hp_search_generators.py      búsqueda de hiperparámetros de los 4 generadores
     ├── hp_search.py                 búsqueda del predictor (walk-forward + purga)
     ├── analizar_hpsearch.py         elige ganadores con la regla de 1 error estándar
-    ├── rejilla_paralela.py          las 38 combinaciones del nb 04 en N procesos
+    ├── rejilla_paralela.py          las 84 combinaciones del nb 04 en N procesos
     ├── lanzar_rejilla_paralela.sh   lanza los workers y consolida checkpoints
+    ├── comparar_arquitecturas_paralelo.py   las 8 candidatas, un proceso cada una
+    ├── comparar_arquitecturas_paralelo.sh   lanza las 8 y consolida el checkpoint
+    ├── grafica_mae_vs_anios.py      figura MAE vs años sintéticos, por horizonte
     └── experimento_espectro_gan.py  ¿predice la fidelidad la utilidad? (§6.3)
 ```
 
@@ -308,10 +320,10 @@ el modelo ha convergido. Conseguirlo requirió dos cosas, y la importante no
 es la obvia.
 
 **La que de verdad importa: regularizar.** Sin `dropout` ni `L2`, las redes
-memorizaban —hasta 394.009 parámetros sobre 1.104 ventanas, 344 por
+memorizaban —hasta 394.009 parámetros sobre 1.045 ventanas, 377 por
 muestra— y el `val_loss` **subía** tras su mínimo: mediana +7,4 %, máximo
 +17,6 %. Eso no es una curva convergida por mucho que se alargue el
-entrenamiento. Con `dropout=0.3` y `L2=1e-4` (aplicados por igual a la
+entrenamiento. Con `dropout=0.5` y `L2=1e-3` (aplicados por igual a la
 selección de arquitectura y a las rejillas, vía el diccionario `REG`), la
 subida baja a una mediana del **+0,20 %** (máximo +0,85 %) en los 38
 entrenamientos: curva plana de verdad.
@@ -389,6 +401,29 @@ y test son exactamente los mismos ~6+~6 meses reales para las cuatro
 versiones del generador, así que la comparación es "misma arquitectura,
 mismos datos de evaluación, distinto backfill" — la única variable que
 cambia.
+
+*Dos fugas que este apartado afirmaba no tener, y sí tenía.* Ambas se
+encontraron auditando el código contra lo que este README prometía, y las
+dos están corregidas:
+
+- **La referencia "sin sintéticos" no lo era.** El recorte filtraba por la
+  fecha del *último* día de cada ventana, así que dejaba pasar ventanas de
+  60 días que terminaban en territorio real arrastrando días sintéticos en
+  la entrada: un 5,34% de contenido sintético en el punto de comparación
+  del que cuelga toda la conclusión. Corregido en `slice_by_depth`
+  (§6.4); pasa a 0,0000%.
+- **El objetivo de validación se asomaba al test.** El corte val/test
+  miraba solo la fecha de *entrada*, pero con horizonte `h` el objetivo
+  promedia los `h` días siguientes: las últimas ventanas de validación
+  tenían su target dentro del periodo de test. Con `h=30` eran 30 de 126
+  (un 24%). Como la validación gobierna el *early stopping* y la elección
+  de arquitectura, era información del test entrando por detrás. Corregido
+  con `train_utils.split_val_test`, compartido por el notebook 04 y el
+  script paralelo para que no puedan divergir.
+
+La frontera train/val no necesitaba esa segunda corrección: la purga de
+`WINDOW_X_DAYS` = 60 días naturales ya es mayor que los ~42 días naturales
+que ocupan 30 días de mercado, el horizonte más largo.
 
 **5. Sesgo de supervivencia — limitación reconocida, no oculta.** El
 universo de 25 bancos (`PREDICTOR_TICKERS`) son bancos **activos hoy**
@@ -557,8 +592,17 @@ entrenar el predictor → medir en el **mismo test real**
 
 **Variando el MMD un factor 800×, el test MAE se mueve 0.000004** — el 0,6 %
 de un error estándar. Los seis quedan además ligeramente por encima del
-predictor constante (0.011762) y con precisión direccional clavada en el
-50 %.
+predictor constante y con precisión direccional clavada en el 50 %.
+
+> **Nota de trazabilidad.** Estas seis cifras son las últimas medidas de
+> `scripts/experimento_espectro_gan.py`, que se ejecutó con `dropout=0.3` /
+> `L2=1e-4` y con el corte val/test anterior a la corrección de §6.4. El
+> script ya está alineado con la configuración actual (0.5 / 1e-3 y
+> `train_utils.split_val_test`), pero **no se ha vuelto a lanzar**: son
+> horas de cómputo y la conclusión que sostiene —que la fidelidad no
+> predice la utilidad— es de orden de magnitud, no de cuarta cifra. Los
+> valores absolutos de esta tabla no son directamente comparables con los
+> de §6.4 y §6.5.
 
 Este experimento también enseñó algo sobre cómo medirlo. En su primera
 versión el predictor no era exactamente el de la rejilla, y las
@@ -603,10 +647,14 @@ como los retornos diarios son casi incorrelados en el tiempo, eso es
 *activamente* peor que no predecir nada, y compararse solo contra él hace
 que cualquier red parezca buena.
 
-**El error estándar (0.00075) es el doble del rango completo entre las
-cinco redes** (0.011485 → 0.011813 = 0.00033). Las cinco caen dentro de
-1 e.e. de la mejor: con 126 días de validación **no es que se elija bien la
-arquitectura, es que no se puede elegir**. Quedarse con el mínimo sería
+**El error estándar (0.000757) es setecientas veces el rango completo
+entre las cinco redes** (0.011532 → 0.011533 = 0.000001). Las cinco caen
+dentro de 1 e.e. de la mejor: con 125 días de validación **no es que se
+elija bien la arquitectura, es que no se puede elegir**. Que cinco
+arquitecturas tan distintas —de 38.465 a 394.009 parámetros— coincidan
+hasta la sexta cifra decimal no es casualidad: con dropout 0.5 y L2 1e-3
+todas han colapsado a predecir prácticamente la media, que es justo lo que
+hace el modelo nulo. Quedarse con el mínimo sería
 elegir la que mejor encaja con el ruido de ese corte — y además la más
 cara. La regla de 1 e.e. selecciona `rnn_1capa`, 4× más pequeña que la del
 mínimo.
@@ -617,26 +665,66 @@ sectorial, así que dividir por √(25·n_días) exageraría la precisión unas 
 veces.
 
 **Rejilla por años de backfill** (`04_resultados_rejilla_profundidad.csv`),
-test MAE / precisión direccional con `+28` años de historia sintética:
+test MAE / precisión direccional con `+24` años de historia sintética:
 
 | Generador | test MAE | Precisión direccional |
 |---|---|---|
-| referencia `synth_years=0` (n=211) | 0.011906 | 50.4% |
-| RBIG | **0.011745** | **52.9%** |
-| GAN | 0.011842 | 51.1% |
-| Ruido | 0.011856 | 51.9% |
-| Gaussiana | 0.011867 | 49.5% |
+| referencia `solo_reales` (n=1045, 0% sintético) | **0.011764** | **52.0%** |
+| GAN | 0.011777 | 50.1% |
+| Ruido | 0.011778 | 50.1% |
+| Gaussiana | 0.011778 | 50.4% |
+| RBIG | 0.011781 | 50.1% |
 
-**Esta tabla no admite la lectura "gana RBIG"** — ver §6.6. En la ejecución
-anterior el mismo puesto lo ocupaba otro generador. Se incluye porque el
-enunciado la pide, no porque ordene nada.
+**Esta tabla no admite la lectura "gana X"** — ver §6.6. En ejecuciones
+anteriores el mismo puesto lo ocupaba otro generador. Se incluye porque el
+enunciado la pide, no porque ordene nada. Nótese que a 24 años los cuatro
+quedan por *debajo* de la referencia: el óptimo está en 10 años (0.011756),
+y llenar el entrenamiento hasta 1996 empeora.
 
-Hay además un matiz de la propia referencia que conviene explicitar: con
-`synth_years=0` quedan 211 ventanas, de las cuales un **28% contiene algún
-día sintético** en su entrada. No es un cero limpio, porque una ventana de
-60 días que cruza la frontera real/sintética arrastra días sintéticos
-aunque su último día sea real. El cero limpio lo da la rejilla por
-porcentaje (§6.5).
+#### La referencia limpia: un fallo que había que arreglar
+
+Durante buena parte del desarrollo esta referencia estaba contaminada. El
+recorte usaba `idx >= REAL_INTRADAY_START_DATE`, pero `idx[j]` es el
+**último** día de la ventana `j`: una ventana de 60 días que termina en
+territorio real puede arrastrar hasta 59 días sintéticos en su entrada. El
+`synth_years=0` "sin sintéticos" tenía en realidad un **5,34%**.
+
+No era un detalle cosmético: es el punto de comparación del que cuelga toda
+la conclusión del trabajo, y estaba midiendo el sintético contra sí mismo.
+`slice_by_depth` exige ahora, para `synth_years=0`, ventanas con contenido
+sintético **cero**, usando la máscara a nivel de ventana de
+`ventana_contiene_sintetico`. Quedan **1045 ventanas al 0,0000%**, desde
+2021-01-29 — exactamente 60 días de mercado después del primer dato
+intradía real.
+
+El efecto va en la dirección incómoda de admitir pero correcta de
+reportar: al limpiar la referencia, **el beneficio aparente del dato
+sintético sube**, porque antes la referencia ya se estaba beneficiando de
+él en secreto.
+
+#### Los tres horizontes
+
+La misma rejilla se repite prediciendo el retorno del día siguiente (h=1),
+la media de los 7 días siguientes (h=7) y la de los 30 (h=30) —84
+combinaciones en total— con los mismos modelos entrenados. Los MAE **no son
+comparables entre horizontes**: promediar 30 días reduce la varianza del
+objetivo, así que un MAE cinco veces menor no es un modelo cinco veces
+mejor. Cada horizonte se mide contra *su* constante:
+
+| Horizonte | constante | mejor con sintéticos | mejora | en e.e. |
+|---|---|---|---|---|
+| 1 día | 0.011770 | 0.011756 (Ruido, 10 a) | −0.12% | 0.02 |
+| 7 días | 0.004716 | 0.004659 (Gaussiana, 10 a) | −1.22% | 0.23 |
+| 30 días | 0.002235 | 0.002181 (RBIG, 10 a) | −2.41% | **0.48** |
+
+La tendencia es ordenada y crece con el horizonte —lo esperable si el
+sintético aporta contexto de régimen y no señal de día a día—, y en los
+tres casos el óptimo cae en **10 años**. Pero ninguna alcanza 1 error
+estándar: sigue sin ser distinguible del ruido. La figura es
+`reports/figures/04_mae_vs_anios_por_horizonte.png`
+(`scripts/grafica_mae_vs_anios.py`), con la banda de ±1 e.e. dibujada
+precisamente para que el eje Y ampliado no invite a leer una tendencia
+donde no la hay.
 
 ### 6.5 El eje que pide el enunciado: porcentaje de datos sintéticos
 
@@ -653,26 +741,33 @@ Media de los 4 generadores en cada nivel (`05_tabla_porcentaje_sintetico.csv`):
 
 | % sintético | n_train | acierto | ±e.e. | vs. referencia |
 |---|---|---|---|---|
-| **0% (real puro)** | 152 | **50.1%** | — | — |
-| 25% | 203 | 51.92% | 0.38 | +1.82 |
-| 50% | 304 | 51.72% | 0.29 | +1.62 |
-| 75% | 608 | 51.41% | 0.14 | +1.31 |
-| **90%** | 1.520 | **53.54%** | 0.91 | **+3.44** |
-| 100% (sin ancla real) | 6.885 | 52.27% | 0.19 | +2.17 |
+| **0% (real puro)** | 1.045 | **52.00%** | — | — |
+| 25% | 1.393 | 50.72% | 0.13 | −1.28 |
+| 50% | 2.090 | 51.93% | 0.15 | −0.07 |
+| 75% | 4.180 | 50.95% | 0.00 | −1.05 |
+| 90% | 7.033 | 50.15% | 0.08 | −1.85 |
+| **100% (sin ancla real)** | 5.988 | **52.72%** | 0.00 | **+0.72** |
 
-Aquí el 0% **sí** es un cero limpio: solo ventanas íntegramente reales. Y da
-**50.1%**, una moneda al aire — que es la referencia honesta contra la que
-medir.
+**Esta tabla decía lo contrario en versiones anteriores de este README, y
+la corrección merece explicarse.** Antes la referencia del 0% eran 152
+ventanas y daba 50,1%; todos los niveles con sintéticos la superaban, con
+un pico aparente en el 90%. Ese 0% era el mismo recorte contaminado de
+§6.4: al exigir ventanas íntegramente reales pasa a 1.045 ventanas y sube a
+**52,0%**, y con una referencia diez veces mayor —y por tanto mucho menos
+ruidosa— **cuatro de los cinco niveles con sintéticos quedan por debajo**.
 
-Todos los niveles con sintéticos la superan, con **pico en el 90%** y caída
-al pasar al 100%, donde ya no queda ningún dato real de ancla. Ese mismo
-patrón —máximo antes del 100%, caída al quitar el ancla real— aparece por
-separado en el experimento de volatilidad de v2 (§6.9), y es lo que le da
-crédito: dos experimentos independientes, no un p-valor.
+Lo que había antes no era un hallazgo, era una referencia con 152 muestras.
 
-Tendencia sobre los 20 puntos con sintéticos: **+1.26 puntos de acierto por
-cada 100% de sintético**, Spearman ρ=+0.393 (p=0.087). Sugerente, no
-concluyente — y el 75% rompe la monotonía.
+Tendencia sobre los 20 puntos con sintéticos: **+0.84 puntos de acierto por
+cada 100% de sintético**, Spearman ρ=+0.250 (p=0.288). No concluyente. El
+único nivel que supera a la referencia es el 100% (+0.72 pp), que es
+además el caso que el enunciado pide explícitamente —entrenar **sin un solo
+dato real**— y que aquí no resulta peor que entrenar con ellos.
+
+Conviene no sobreinterpretar tampoco eso: 0,72 puntos de acierto
+direccional sobre 122 días de test están dentro del ruido, y §6.6 muestra
+que el acierto direccional de una misma configuración se mueve hasta 6,36
+puntos entre ejecuciones idénticas.
 
 ### 6.6 Cuánto de todo esto es señal: el suelo de ruido
 
@@ -831,18 +926,18 @@ La primera vez que se corrieron estas dos rejillas, la tabla daba "el Ruido
 gana con +0,33 % de mejora" y "RBIG empeora un 1,4 %", y llegó a parecer un
 resultado con lectura financiera. Aquellos números salían de modelos **sin
 regularizar**, y lo que medían era cuánto sobreajustaba cada configuración:
-con 1.104-7.033 muestras y decenas de
+con 1.045-7.033 muestras y decenas de
 miles de parámetros, qué punto rescataba `restore_best_weights` dependía del
 azar de la inicialización.
 
-Al añadir `dropout=0.3` y `L2=1e-4` la amplitud de la rejilla cayó de
-0.000396 a 0.000032 y el orden entre generadores se volvió intercambiable.
+Al subir a `dropout=0.5` y `L2=1e-3` la amplitud de la rejilla cayó de
+0.000396 a 0.000043 y el orden entre generadores se volvió intercambiable.
 Ésa es la lección metodológica del proyecto, y vale más que la respuesta a
 la pregunta original: **sin un modelo nulo en la tabla y sin control del
 sobreajuste, un pipeline de este tipo produce rankings de generadores que
 parecen significativos y no lo son.**
 
-### 6.5 Cómo reproducir estos números
+### 6.10 Cómo reproducir estos números
 
 Todo lo anterior sale de ejecutar, en orden, `00` → `05` con
 `jupyter nbconvert --to notebook --execute --inplace` (o abriendo cada
@@ -861,20 +956,35 @@ python scripts/analizar_hpsearch.py                               # elegir ganad
 python scripts/experimento_espectro_gan.py                        # fidelidad vs utilidad
 ```
 
-**Atajo para el notebook 04.** Sus 38 entrenamientos son independientes entre
-sí, así que se pueden repartir entre procesos. `scripts/rejilla_paralela.py`
-lo hace y escribe en los mismos checkpoints que el notebook lee, de modo que
-al ejecutarlo después se los encuentra hechos y solo genera tablas y
-gráficas:
+**Atajo para el notebook 04.** Es el notebook caro: 8 candidatas de
+arquitectura más 84 combinaciones de rejilla (4 generadores × 6
+profundidades × 3 horizontes, más las referencias sin sintéticos). Todos
+esos entrenamientos son independientes entre sí, así que se reparten entre
+procesos. Los dos scripts escriben en los mismos checkpoints que el
+notebook lee, de modo que al ejecutarlo después se los encuentra hechos y
+solo genera tablas y gráficas.
+
+El orden importa: la rejilla entrena la arquitectura **ganadora**, así que
+la comparación tiene que ir antes.
 
 ```bash
-./scripts/lanzar_rejilla_paralela.sh 10       # 10 workers
+./scripts/comparar_arquitecturas_paralelo.sh   # 8 procesos, uno por candidata
+./scripts/lanzar_rejilla_paralela.sh 10        # 10 workers
 ```
 
-En una máquina de 10 núcleos: **9 min 36 s** frente a las 2 h 02 min de la
-versión secuencial. El resultado es idéntico porque `train_utils.set_seed()`
-re-fija `config.RANDOM_SEED` antes de construir **cada** modelo, así que no
-depende de en qué orden ni en qué proceso se entrene cada combinación.
+En una máquina de 10 núcleos, la cadena completa (arquitecturas + rejilla +
+los dos notebooks) baja a **~15 min**; solo las arquitecturas pasan de ~10
+min a 2 min 09 s, acotadas por la candidata más lenta (`rnn_2capas`).
+
+El resultado es idéntico al secuencial, no una aproximación: cada worker
+llama a la **misma** función (`run_architecture_comparison`, con un
+diccionario de una sola entrada) y `train_utils.set_seed()` re-fija
+`config.RANDOM_SEED` antes de construir **cada** modelo, así que no depende
+de en qué orden ni en qué proceso se entrene cada combinación.
+
+El lanzador toma un cerrojo: si se invoca dos veces a la vez, la segunda
+llamada aborta en vez de duplicar los workers (16 procesos peleando por 10
+núcleos fue un error real durante el desarrollo).
 
 ## 7. Conclusiones
 
@@ -887,16 +997,26 @@ modelo generativo: un GAN cuidadosamente optimizado no bate a añadir ruido
 gaussiano a datos reales.
 
 **2. La conclusión contraria de las primeras pasadas venía de sobreajuste,
-no de señal.** Con redes de hasta 394.009 parámetros sobre 1.104 ventanas,
+no de señal.** Con redes de hasta 394.009 parámetros sobre 1.045 ventanas,
 las diferencias entre generadores medían cuánto memorizaba cada
-configuración. Al añadir `dropout=0.3` y `L2=1e-4`, la amplitud cayó de
-0.000396 a 0.000032 y el ranking se volvió intercambiable. **Ésta es la
+configuración. Al subir a `dropout=0.5` y `L2=1e-3`, la amplitud cayó de
+0.000396 a 0.000043 y el ranking se volvió intercambiable. **Ésta es la
 lección metodológica principal del trabajo**: sin modelo nulo en la tabla y
 sin control del sobreajuste, este tipo de pipeline produce rankings que
 parecen significativos y no lo son.
 
-**3. Ni siquiera la elección de arquitectura era reproducible.** Las tres
-mejores redes están separadas por 0.000003 en MAE de validación, y el orden
+El corolario incómodo es que la lección se aplicó dos veces. La referencia
+"sin sintéticos" arrastraba un 5,34% de días sintéticos por un error de una
+línea en el recorte (§6.4), y la referencia del 0% de la rejilla por
+porcentaje tenía 152 ventanas en vez de 1.045. Corregir ambas **invirtió el
+signo de §6.5**: donde parecía que todos los niveles con sintéticos batían
+al real puro, ahora cuatro de cinco quedan por debajo. Ninguna de las dos
+conclusiones era significativa; la diferencia es que la segunda es la que
+se sostiene al mirar bien.
+
+**3. Ni siquiera la elección de arquitectura era reproducible.** Las cinco
+redes están separadas por 0.000001 en MAE de validación —frente a un error
+estándar de 0.000757, setecientas veces mayor—, y el orden
 entre ellas cambiaba de una ejecución a otra por el azar de la
 inicialización de pesos. Se corrigió fijando `config.RANDOM_SEED` y
 eligiendo con la regla de un error estándar —entre las empatadas, la más
@@ -974,8 +1094,9 @@ La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
    construye el pool real. Tarda ~15-20 min la primera vez (150 tickers ×
    ~5 años de barras de 5 min); las siguientes ejecuciones usan la caché.
 3. `01` → `02` → `03` → `04` → `05` en orden. `02` y `04` requieren
-   TensorFlow; `04` es el más lento (38 entrenamientos hasta convergencia
-   con `EarlyStopping` — ver el atajo paralelo en §6.5).
+   TensorFlow; `04` es el más lento (8 arquitecturas + 84 combinaciones de
+   rejilla hasta convergencia con `EarlyStopping` — ver el atajo paralelo
+   en §6.10).
 
 ## 9. Limitaciones y trabajo futuro
 
@@ -988,7 +1109,7 @@ La API key de EODHD vive solo en `datos/APkey` (gitignored) y se lee con
   aprendida en la ventana real es representativa de 1996-2020; es la
   hipótesis de trabajo central del proyecto, no un hecho verificado
   independientemente.
-- La comparación de arquitecturas usa `dropout=0.3` y `L2=1e-4` fijos, no
+- La comparación de arquitecturas usa `dropout=0.5` y `L2=1e-3` fijos, no
   buscados: se eligieron para que las curvas converjan, no por optimizar el
   MAE. Con más tiempo valdría la pena una búsqueda fina de learning rate,
   tamaño de ventana y número de capas, aunque dado que las tres mejores

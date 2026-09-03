@@ -107,8 +107,15 @@ LOSS_FUNCTION = "mae"
 # de la de validacion. Es lo esperado, no un error: durante el entrenamiento
 # se apaga el 30% de las neuronas, mientras que en validacion el modelo va
 # completo.
-DROPOUT = 0.3
-L2_REG = 1e-4
+# Subidos de 0.3/1e-4 tras comprobar que con aquellos valores `dense` y
+# `cnn_1bloque` NO convergian: paraban en la epoca ~72 con el train aun
+# descendiendo (pendiente -3.6e-5) y por DEBAJO del suelo del predictor
+# constante (0.01509), señal de que estaban memorizando. Con 0.5/1e-3
+# entrenan 152-181 epocas, aterrizan justo en ese suelo y su pendiente cae a
+# ~5e-9, el mismo orden que las tres que ya convergian. No era falta de
+# tiempo, era exceso de capacidad: 394.009 parametros para 1.104 ventanas.
+DROPOUT = 0.5
+L2_REG = 1e-3
 
 # PURGA / EMBARGO. Cada muestra usa una ventana de WINDOW_X_DAYS dias, asi
 # que una fila de entrenamiento fechada pocos dias antes de VAL_START_DATE
@@ -128,10 +135,17 @@ L2_REG = 1e-4
 # estaba limpio (183 dias naturales lo separan del fin del entrenamiento,
 # mas que los 60 de la ventana), asi que esto solo corrige la validacion.
 EMBARGO_DAYS = config.WINDOW_X_DAYS
-TRAIN_END = str(
+# OJO: `slice_by_depth`, `slice_by_pct`, `run_depth_grid` y `run_pct_grid`
+# aplican la purga ELLAS, restando `embargo_days` de `train_end`. Asi que
+# aqui se pasa VAL_START_DATE tal cual y NO se resta nada: hacerlo en los dos
+# sitios daria un embargo de 120 dias en vez de 60.
+# `TRAIN_END_EFECTIVO` es solo informativo, para imprimirlo y para el
+# predictor constante, que se calcula a mano mas abajo.
+TRAIN_END = config.VAL_START_DATE
+TRAIN_END_EFECTIVO = str(
     (pd.Timestamp(config.VAL_START_DATE) - pd.Timedelta(days=EMBARGO_DAYS)).date()
 )
-print(f"entrenamiento hasta {TRAIN_END} (VAL empieza {config.VAL_START_DATE}, "
+print(f"entrenamiento hasta {TRAIN_END_EFECTIVO} (VAL empieza {config.VAL_START_DATE}, "
       f"embargo de {EMBARGO_DAYS} dias)")
 
 # %% [markdown]
@@ -150,25 +164,46 @@ for name in ["noise", "gaussian", "rbig", "gan"]:
     # cruza la frontera arrastra hasta 59 días sintéticos en su entrada y
     # se estaba contando como real (ver tu.ventana_contiene_sintetico).
     is_synth = tu.ventana_contiene_sintetico(npz["is_synthetic"], config.WINDOW_X_DAYS)
-    datasets_by_generator[name] = (npz["X"], npz["Y"], idx, is_synth)
-    print(f"{name}: X {npz['X'].shape}  Y {npz['Y'].shape}  "
+    # Un solo X y un target por horizonte. X no depende del horizonte, asi
+    # que los tres comparten exactamente las mismas entradas: lo unico que
+    # cambia entre ellos es lo que se predice.
+    datasets_by_generator[name] = {
+        "X": npz["X"], "idx": idx, "is_synth": is_synth,
+        "Y": {h: npz[f"Y_h{h}"] for h in config.HORIZONTES_DIAS},
+    }
+    print(f"{name}: X {npz['X'].shape}  targets {list(datasets_by_generator[name]['Y'])}  "
           f"sintéticas {npz['is_synthetic'].mean():.4f} -> {is_synth.mean():.4f}")
 
-N_CHANNELS = datasets_by_generator[next(iter(datasets_by_generator))][0].shape[-1]  # 2 * N_PREDICTOR_TICKERS
+N_CHANNELS = datasets_by_generator[next(iter(datasets_by_generator))]["X"].shape[-1]
 assert N_CHANNELS == 2 * config.N_PREDICTOR_TICKERS
 
 # %% [markdown]
 # ## 2. Separar validación y test (reales, jamás usados por los generadores)
 
 # %%
-def val_test_split(X, Y, idx):
-    val_mask = (idx >= pd.Timestamp(config.VAL_START_DATE)) & (idx < pd.Timestamp(config.REAL_TEST_HOLDOUT_START_DATE))
-    test_mask = idx >= pd.Timestamp(config.REAL_TEST_HOLDOUT_START_DATE)
-    return (X[val_mask], Y[val_mask]), (X[test_mask], Y[test_mask])
+# El split vive en `tu.split_val_test` porque scripts/rejilla_paralela.py
+# tiene que usar EXACTAMENTE el mismo criterio: si los dos sitios cortan
+# distinto, los checkpoints que escribe el script paralelo no son
+# comparables con lo que calcula este notebook.
+val_test_split = tu.split_val_test
 
 ref_name = next(iter(datasets_by_generator))
-(X_val, Y_val), (X_test, Y_test) = val_test_split(*datasets_by_generator[ref_name][:3])
-print(f"val: {X_val.shape}   test: {X_test.shape}")
+
+# Vista (X, Y, idx, is_synth) por horizonte, y su val/test. Cada horizonte
+# pierde un numero distinto de ventanas al final (las que no tienen dias
+# futuros suficientes), asi que los splits se calculan uno por uno.
+vistas = {h: {g: tu.vista_horizonte(d, h) for g, d in datasets_by_generator.items()}
+          for h in config.HORIZONTES_DIAS}
+val_test = {}
+for h in config.HORIZONTES_DIAS:
+    val_test[h] = val_test_split(*vistas[h][ref_name][:3], horizonte=h)
+    (Xv, Yv), (Xt, Yt) = val_test[h]
+    print(f"h={h:2d}: val {Xv.shape[0]:4d}   test {Xt.shape[0]:4d} ventanas")
+
+# El caso base (1 dia) conserva los nombres de siempre: es el que usan la
+# comparacion de arquitecturas, la rejilla por porcentaje y el README.
+(X_val, Y_val), (X_test, Y_test) = val_test[config.WINDOW_Y_DAYS]
+datasets_h1 = vistas[config.WINDOW_Y_DAYS]
 
 # %% [markdown]
 # ## 3. Elegir arquitectura, usando SOLO la ventana real disponible
@@ -178,11 +213,11 @@ print(f"val: {X_val.shape}   test: {X_test.shape}")
 # `REAL_INTRADAY_START_DATE` (2020-11) y `VAL_START_DATE` (2025-06).
 
 # %%
-X_full, Y_full, idx_full, is_synth_full = datasets_by_generator[ref_name]
+X_full, Y_full, idx_full, is_synth_full = datasets_h1[ref_name]
 X_train_arch, Y_train_arch, _, _ = tu.slice_by_depth(
     X_full, Y_full, idx_full, synth_years=0,
     train_end=TRAIN_END, synth_anchor=config.REAL_INTRADAY_START_DATE,
-    is_synthetic=is_synth_full,
+    is_synthetic=is_synth_full, embargo_days=EMBARGO_DAYS,
 )
 print("train (arquitectura, solo reales):", X_train_arch.shape)
 
@@ -214,12 +249,28 @@ architectures = {
     ),
 }
 
-arch_results, arch_histories = tu.run_architecture_comparison(
-    architectures, X_train_arch, Y_train_arch, X_val, Y_val, X_test, Y_test,
-    epochs=EPOCHS_ARQUITECTURA, batch_size=BATCH_SIZE, verbose=0,
-    early_stopping_patience=EARLY_STOPPING_PATIENCE,
-)
-arch_results.to_csv(config.TABLES_DIR / "04_comparacion_arquitecturas.csv")
+# Checkpoint de la comparacion de arquitecturas: son 8 modelos de 145-180
+# epocas, ~10 min. Si ya estan calculados con esta misma configuracion no
+# tiene sentido repetirlos. Para rehacerlos, borrar los dos ficheros.
+_ARCH_CSV = config.TABLES_DIR / "04_comparacion_arquitecturas.csv"
+_ARCH_HIST = config.INTERIM_DIR / "04_checkpoint_arquitecturas_histories.json"
+
+if _ARCH_CSV.exists() and _ARCH_HIST.exists():
+    import json as _json
+    arch_results = pd.read_csv(_ARCH_CSV, index_col=0)
+    arch_histories = _json.loads(_ARCH_HIST.read_text(encoding="utf-8"))
+    print(f"comparacion de arquitecturas: reutilizando checkpoint ({len(arch_results)} modelos)")
+else:
+    arch_results, arch_histories = tu.run_architecture_comparison(
+        architectures, X_train_arch, Y_train_arch, X_val, Y_val, X_test, Y_test,
+        epochs=EPOCHS_ARQUITECTURA, batch_size=BATCH_SIZE, verbose=0,
+        early_stopping_patience=EARLY_STOPPING_PATIENCE,
+    )
+    import json as _json
+    arch_results.to_csv(_ARCH_CSV)
+    _ARCH_HIST.write_text(_json.dumps(
+        {k: {m: [float(x) for x in v] for m, v in h.items()}
+         for k, h in arch_histories.items()}, indent=2), encoding="utf-8")
 arch_results.sort_values("val_mae")
 
 # %%
@@ -242,6 +293,14 @@ fig
 
 # %%
 ARQUITECTURA_GANADORA = tu.elegir_por_una_ee(arch_results)
+
+# `elegir_por_una_ee` desempata por `n_params`, que es NaN en constante /
+# baseline / linear, asi que nunca puede devolver una de ellas: lo que sale
+# es siempre una red entrenable. `ARQUITECTURA_RED` es el nombre que usa
+# `build_final_model` y se mantiene como alias para dejarlo explicito —
+# si algun dia la regla pudiera elegir un modelo sin `.fit` de keras, aqui
+# es donde habria que separarlas.
+ARQUITECTURA_RED = ARQUITECTURA_GANADORA
 mejor_direccional = arch_results["val_directional_accuracy"].idxmax()
 print("Ranking por validación (criterio de selección):")
 print(arch_results[["val_mae", "val_mae_se", "n_params", "mae"]]
@@ -305,17 +364,51 @@ def build_final_model():
 # terminadas y continua desde la primera pendiente.
 
 # %%
-results, histories, per_ticker = tu.run_depth_grid(
-    build_final_model, datasets_by_generator, X_val, Y_val, X_test, Y_test,
-    synth_years_grid=config.SYNTH_DEPTH_YEARS_GRID, train_end=TRAIN_END,
-    synth_anchor=config.REAL_INTRADAY_START_DATE,
-    epochs=EPOCHS_REJILLA, batch_size=BATCH_SIZE, verbose=0,
-    early_stopping_patience=EARLY_STOPPING_PATIENCE,
-    ticker_names=config.PREDICTOR_TICKERS,
-    checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad.csv",
-    history_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad_histories.json",
-    per_ticker_checkpoint_path=config.INTERIM_DIR / "04_checkpoint_rejilla_profundidad_por_banco.csv",
-)
+# Un pase por horizonte. Los checkpoints los deja ya escritos
+# `scripts/rejilla_paralela.py` (ver §6.10 del README), asi que aqui se
+# encuentran hechos y solo se leen; si faltara alguno, se entrenaria.
+resultados_h, historias_h, por_banco_h = {}, {}, {}
+for h in config.HORIZONTES_DIAS:
+    suf = "" if h == config.WINDOW_Y_DAYS else f"_h{h}"
+    (Xv, Yv), (Xt, Yt) = val_test[h]
+    print(f"\n----- horizonte {h} dia(s) -----")
+    resultados_h[h], historias_h[h], por_banco_h[h] = tu.run_depth_grid(
+        build_final_model, vistas[h], Xv, Yv, Xt, Yt,
+        synth_years_grid=config.SYNTH_DEPTH_YEARS_GRID, train_end=TRAIN_END,
+        synth_anchor=config.REAL_INTRADAY_START_DATE,
+        epochs=EPOCHS_REJILLA, batch_size=BATCH_SIZE, verbose=0,
+        early_stopping_patience=EARLY_STOPPING_PATIENCE,
+        ticker_names=config.PREDICTOR_TICKERS,
+        checkpoint_path=config.INTERIM_DIR / f"04_checkpoint_rejilla_profundidad{suf}.csv",
+        history_checkpoint_path=config.INTERIM_DIR / f"04_checkpoint_rejilla_profundidad{suf}_histories.json",
+        per_ticker_checkpoint_path=config.INTERIM_DIR / f"04_checkpoint_rejilla_profundidad{suf}_por_banco.csv",
+    )
+    resultados_h[h]["horizonte"] = h
+    resultados_h[h].to_csv(config.TABLES_DIR / f"04_resultados_rejilla_profundidad{suf}.csv", index=False)
+
+# El caso base conserva los nombres de siempre
+results, histories, per_ticker = (resultados_h[config.WINDOW_Y_DAYS],
+                                  historias_h[config.WINDOW_Y_DAYS],
+                                  por_banco_h[config.WINDOW_Y_DAYS])
+
+# Tabla unica con los tres horizontes, y el modelo NULO de cada uno como
+# referencia: los MAE no son comparables entre horizontes (el target a 30
+# dias es ~6x mas pequeno), solo contra la constante de su propio horizonte.
+filas_cte = []
+for h in config.HORIZONTES_DIAS:
+    Xh, Yh, ih, ish = vistas[h][ref_name]
+    Xtr_h, Ytr_h, _, _ = tu.slice_by_depth(Xh, Yh, ih, 0, TRAIN_END,
+                                           config.REAL_INTRADAY_START_DATE, ish,
+                                           embargo_days=EMBARGO_DAYS)
+    (_, _), (Xt, Yt) = val_test[h]
+    cte = modelos.build_predictor_constant().fit(Xtr_h, Ytr_h)
+    m = tu.evaluate_predictor(cte, Xt, Yt)
+    filas_cte.append({"horizonte": h, "generator": "constante", "synth_years": np.nan,
+                      "n_train": len(Xtr_h), **m})
+constantes = pd.DataFrame(filas_cte)
+constantes.to_csv(config.TABLES_DIR / "04_constante_por_horizonte.csv", index=False)
+print("\nMODELO NULO por horizonte (predecir la media, sin mirar X):")
+print(constantes[["horizonte", "n_train", "mae", "directional_accuracy"]].round(6).to_string(index=False))
 results.to_csv(config.TABLES_DIR / "04_resultados_rejilla_profundidad.csv")
 results.sort_values(["generator", "synth_years"])
 
@@ -359,7 +452,10 @@ fig
 
 # %%
 results_pct, histories_pct, per_ticker_pct = tu.run_pct_grid(
-    build_final_model, datasets_by_generator, X_val, Y_val, X_test, Y_test,
+    # `datasets_h1` = vista a 1 dia (tuplas), que es lo que espera run_pct_grid.
+    # La rejilla por porcentaje se queda en el horizonte base: es el eje que
+    # pide literalmente el enunciado y multiplicarlo por 3 no anade un eje nuevo.
+    build_final_model, datasets_h1, X_val, Y_val, X_test, Y_test,
     pct_grid=config.PCT_SYNTH_GRID, train_end=TRAIN_END,
     epochs=EPOCHS_REJILLA, batch_size=BATCH_SIZE, verbose=0,
     early_stopping_patience=EARLY_STOPPING_PATIENCE,

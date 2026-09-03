@@ -43,6 +43,12 @@ def build_xy_windows(
     n = len(returns)
 
     X_list, Y_list, idx_list = [], [], []
+    # `n - window_y` (y no `n - window_y + 1`) descarta una ventana valida:
+    # con i = n - window_y, `values[i : i + window_y]` sigue cabiendo. Es el
+    # limite del bucle de los notebooks de clase y se mantiene A PROPOSITO,
+    # porque la comparabilidad con el material de referencia vale mas que
+    # una muestra de ~7.000. Si algun dia se cambia, hay que reejecutar la
+    # cadena entera: mueve todos los indices posicionales.
     for i in range(window_x, n - window_y):
         X_list.append(values[i - window_x : i])
         Y_list.append(values[i : i + window_y].mean(axis=0))
@@ -52,6 +58,36 @@ def build_xy_windows(
     Y = np.array(Y_list)
     idx = pd.DatetimeIndex(idx_list)
     return X, Y, idx
+
+
+def target_media_futura(
+    returns: pd.DataFrame,
+    idx: pd.DatetimeIndex,
+    horizonte: int,
+    columnas: list[str] | None = None,
+) -> np.ndarray:
+    """Target a `horizonte` dias para las ventanas X ya construidas: la MEDIA
+    de los `horizonte` dias siguientes a cada fecha de `idx`.
+
+    POR QUE ASI Y NO RECONSTRUYENDO TODO: `build_xy_windows` devuelve X e Y a
+    la vez, asi que cambiar el horizonte obligaria a rehacer X — que es el
+    array pesado (7.500 x 60 x 50). Pero X NO depende del horizonte: es la
+    misma ventana de 60 dias termine donde termine el target. Solo cambia Y.
+    Esta funcion la recalcula alineada al `idx` que ya existe, de modo que
+    los tres horizontes comparten exactamente las mismas entradas y la
+    comparacion entre ellos aisla el efecto del horizonte.
+
+    `idx[j]` es el ULTIMO dia de la ventana j, asi que el target empieza al
+    dia siguiente: para la posicion p, la media de `returns[p+1 : p+1+h]`.
+    Con `rolling(h).mean()` (que en la posicion q promedia `q-h+1..q`) eso
+    es un `shift(-h)`.
+
+    Las ultimas `horizonte` ventanas se quedan sin dias futuros suficientes y
+    salen NaN; el llamante debe filtrarlas.
+    """
+    cols = columnas or list(returns.columns)
+    fut = returns[cols].rolling(horizonte).mean().shift(-horizonte)
+    return fut.reindex(idx).values
 
 
 def split_by_date(idx: pd.DatetimeIndex, split_date: str) -> tuple[np.ndarray, np.ndarray]:

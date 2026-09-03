@@ -43,6 +43,10 @@ datos/APkey
 
 # Large / raw data (not para git; se regenera o se descarga en local
 # ejecutando notebooks/00_descarga_datos.ipynb)
+#
+# `datos/` puede ser un enlace simbolico a un almacen fuera del repo (los
+# .npz del backfill son de GB). Nada de ahi se versiona: se regenera.
+/datos
 datos/*.zip
 datos/*.duckdb
 datos/extracted/

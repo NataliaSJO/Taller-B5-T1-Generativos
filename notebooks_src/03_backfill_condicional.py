@@ -154,19 +154,33 @@ for name, rv_panel in rv_panel_by_generator.items():
     ).dropna()
     X, Y_wide, idx = feat.build_xy_windows(combined, config.WINDOW_X_DAYS, config.WINDOW_Y_DAYS)
     Y = Y_wide[:, : config.N_PREDICTOR_TICKERS]  # solo retornos, no la parte "_rv" de Y
+    # Targets a 7 y 30 dias sobre LAS MISMAS ventanas X. Se calculan aqui,
+    # con `combined` a mano, porque el .dropna() de arriba quita filas y la
+    # aritmetica posicional solo cuadra contra ESE panel, no contra
+    # `returns_predictor` a secas. X no depende del horizonte: es la misma
+    # ventana de 60 dias termine donde termine el target.
+    targets = {}
+    for h in config.HORIZONTES_DIAS:
+        targets[f"Y_h{h}"] = (
+            Y if h == config.WINDOW_Y_DAYS
+            else feat.target_media_futura(combined, idx, h, config.PREDICTOR_TICKERS)
+        )
     is_synthetic = np.asarray(idx < cutoff)
-    datasets_by_generator[name] = (X, Y, idx, is_synthetic)
+    datasets_by_generator[name] = (X, Y, idx, is_synthetic, targets)
     print(f"{name}: X {X.shape}  Y {Y.shape}  rango {idx.min().date()} -> {idx.max().date()}  "
           f"({is_synthetic.mean():.1%} de las filas con volatilidad sintetica en algun punto)")
+    for h, Yh in targets.items():
+        print(f"    {h}: {int((~np.isnan(Yh).any(axis=1)).sum())} ventanas con target valido")
 
 # %% [markdown]
 # ## 7. Guardar (`datos/interim/`, gitignored)
 
 # %%
-for name, (X, Y, idx, is_synthetic) in datasets_by_generator.items():
+for name, (X, Y, idx, is_synthetic, targets) in datasets_by_generator.items():
     np.savez(
         config.INTERIM_DIR / f"dataset_{name}.npz",
         X=X, Y=Y, idx=idx.values.astype("datetime64[ns]"), is_synthetic=is_synthetic,
+        **targets,
     )
 print("Guardados:", [f"dataset_{n}.npz" for n in datasets_by_generator])
 

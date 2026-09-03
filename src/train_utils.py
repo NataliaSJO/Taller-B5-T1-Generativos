@@ -163,8 +163,58 @@ def slice_by_depth(
     end = pd.Timestamp(train_end) - pd.Timedelta(days=embargo_days)
     start = pd.Timestamp(synth_anchor) - pd.Timedelta(days=synth_years * 365.25)
     mask = (idx >= start) & (idx < end)
+
+    # *** El caso `synth_years <= 0` necesita una condicion EXTRA ***
+    # `idx[j]` es el ULTIMO dia de la ventana j, asi que `idx >= start` deja
+    # pasar ventanas que TERMINAN despues de `synth_anchor` pero ARRASTRAN
+    # hasta `WINDOW_X_DAYS - 1` dias sinteticos en su entrada. En la
+    # referencia "sin sinteticos" eso no es un detalle: son 59 ventanas y
+    # convierten un 0% teorico en un 5.34% real, justo en el punto de
+    # comparacion del que cuelga toda la conclusion del trabajo.
+    # `is_synthetic` ya viene a nivel de VENTANA (ver
+    # `ventana_contiene_sintetico`), asi que basta con exigirlo.
+    if synth_years <= 0 and is_synthetic is not None:
+        mask &= ~np.asarray(is_synthetic, dtype=bool)
+
     pct_synth = float(is_synthetic[mask].mean()) if is_synthetic is not None and mask.any() else 0.0
     return X[mask], Y[mask], idx[mask], pct_synth
+
+
+def split_val_test(
+    X: np.ndarray,
+    Y: np.ndarray,
+    idx: pd.DatetimeIndex,
+    horizonte: int,
+    val_start: str = config.VAL_START_DATE,
+    test_start: str = config.REAL_TEST_HOLDOUT_START_DATE,
+) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
+    """Parte (X, Y) en validacion y test SIN que el objetivo de validacion
+    se asome al test.
+
+    El corte ingenuo `val = val_start <= idx < test_start` mira solo la
+    fecha de la ENTRADA. Pero para horizonte h el objetivo de la ventana j
+    es la media de los h dias SIGUIENTES, asi que las ultimas ventanas de
+    validacion tienen su objetivo dentro del test: con h=30 son 30 de ~126
+    ventanas (un 24%). Como la validacion gobierna el early stopping y la
+    eleccion de arquitectura, eso es informacion del test entrando por la
+    puerta de atras.
+
+    La condicion correcta es que el ULTIMO dia que entra en el objetivo
+    siga estando antes del test. `idx` esta en dias de mercado, asi que el
+    dia h-esimo posterior a `idx[j]` es `idx[j + h]`.
+
+    (La frontera train/val no necesita esto: la purga de
+    `config.WINDOW_X_DAYS` = 60 dias naturales ya es mayor que los ~42 dias
+    naturales que ocupan 30 dias de mercado, el horizonte mas largo.)
+    """
+    test_ts = pd.Timestamp(test_start)
+    n = len(idx)
+    # Ultimo dia de mercado que entra en el objetivo de cada ventana.
+    fin_objetivo = idx[np.minimum(np.arange(n) + int(horizonte), n - 1)]
+
+    val_mask = (idx >= pd.Timestamp(val_start)) & (idx < test_ts) & (fin_objetivo < test_ts)
+    test_mask = idx >= test_ts
+    return (X[val_mask], Y[val_mask]), (X[test_mask], Y[test_mask])
 
 
 def slice_by_pct(
@@ -304,6 +354,25 @@ def split_fold(
     return X_tr, Y_tr, X[val_mask], Y[val_mask], pct_synth
 
 
+def vista_horizonte(datos: dict, horizonte: int):
+    """(X, Y, idx, is_synth) para un horizonte concreto.
+
+    `datos` es lo que guarda el notebook 03 en cada `dataset_*.npz`: una X
+    unica y un target por horizonte (`Y_h1`, `Y_h7`, `Y_h30`). X NO depende
+    del horizonte —es la misma ventana de 60 dias termine donde termine el
+    target— asi que los tres comparten exactamente las mismas entradas y la
+    comparacion entre ellos aisla el efecto del horizonte.
+
+    Las `horizonte` ultimas ventanas no tienen dias futuros suficientes para
+    promediar, asi que su target es NaN; se eliminan de las cuatro
+    estructuras a la vez para que sigan alineadas.
+    """
+    Y = datos["Y"][horizonte]
+    validas = ~np.isnan(Y).any(axis=1)
+    return (datos["X"][validas], Y[validas],
+            datos["idx"][validas], datos["is_synth"][validas])
+
+
 def set_seed(seed: int | None = None) -> int:
     """Fija la semilla de `random`, `numpy` y TensorFlow de una sola vez.
 
@@ -433,6 +502,8 @@ def run_architecture_comparison(
     Y_train: np.ndarray,
     X_val: np.ndarray,
     Y_val: np.ndarray,
+    X_test: np.ndarray,
+    Y_test: np.ndarray,
     epochs: int = 50,
     batch_size: int = 32,
     verbose: int = 0,
@@ -559,6 +630,9 @@ def run_depth_grid(
     ticker_names: list[str] | None = None,
     early_stopping_patience: int | None = 100,
     embargo_days: int = config.WINDOW_X_DAYS,
+    checkpoint_path=None,
+    history_checkpoint_path=None,
+    per_ticker_checkpoint_path=None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """Para cada generador de `datasets_by_generator` (nombre -> (X, Y, idx,
     is_synthetic) con el historico COMPLETO de 30 anios construido con el
@@ -593,6 +667,10 @@ def run_depth_grid(
     terminada se guarda al momento y una ejecucion posterior salta las
     combinaciones que ya tengan fila, historial y desglose por banco."""
     value_col = "synth_years"
+    # Checkpoints: cada combinacion terminada se guarda al momento y una
+    # ejecucion posterior la salta. Es lo que permite que el notebook
+    # reutilice lo que ya calculo scripts/rejilla_paralela.py en vez de
+    # reentrenar las 84 combinaciones (horas frente a minutos).
     rows, done = _load_rows_checkpoint(checkpoint_path, value_col)
     histories = _load_history_checkpoint(history_checkpoint_path)
     per_ticker = _load_per_ticker_checkpoint(per_ticker_checkpoint_path, value_col)
@@ -664,6 +742,9 @@ def run_pct_grid(
     ticker_names: list[str] | None = None,
     early_stopping_patience: int | None = 100,
     embargo_days: int = config.WINDOW_X_DAYS,
+    checkpoint_path=None,
+    history_checkpoint_path=None,
+    per_ticker_checkpoint_path=None,
 ) -> tuple[pd.DataFrame, dict, dict]:
     """Igual que `run_depth_grid` pero recortando por PORCENTAJE de filas
     sinteticas (`slice_by_pct`) en vez de por anios de profundidad.
@@ -681,6 +762,10 @@ def run_pct_grid(
     Devuelve (tabla, historiales, por_ticker) con la misma forma que
     `run_depth_grid`, indexando por (generador, pct_objetivo)."""
     value_col = "pct_objetivo"
+    # Checkpoints: cada combinacion terminada se guarda al momento y una
+    # ejecucion posterior la salta. Es lo que permite que el notebook
+    # reutilice lo que ya calculo scripts/rejilla_paralela.py en vez de
+    # reentrenar las 84 combinaciones (horas frente a minutos).
     rows, done = _load_rows_checkpoint(checkpoint_path, value_col)
     histories = _load_history_checkpoint(history_checkpoint_path)
     per_ticker = _load_per_ticker_checkpoint(per_ticker_checkpoint_path, value_col)
