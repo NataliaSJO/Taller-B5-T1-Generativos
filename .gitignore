@@ -46,12 +46,21 @@ datos/APkey
 #
 # `datos/` puede ser un enlace simbolico a un almacen fuera del repo (los
 # .npz del backfill son de GB). Nada de ahi se versiona: se regenera.
-/datos
+/datos/*
 datos/*.zip
 datos/*.duckdb
 datos/extracted/
 datos/raw/
-datos/interim/
+!/datos/interim/
+!/datos/interim/**
+datos/interim/*.parquet
+datos/interim/*.npy
+datos/interim/*.npz
+datos/interim/*.pkl
+datos/interim/**/*.parquet
+datos/interim/**/*.npy
+datos/interim/**/*.npz
+datos/interim/**/*.pkl
 *.duckdb
 
 # reports/figures/ y reports/tables/ SI se versionan: son la evidencia de
