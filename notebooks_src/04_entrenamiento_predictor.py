@@ -145,8 +145,14 @@ for name in ["noise", "gaussian", "rbig", "gan"]:
         continue
     npz = np.load(path, allow_pickle=True)
     idx = pd.DatetimeIndex(npz["idx"])
-    datasets_by_generator[name] = (npz["X"], npz["Y"], idx, npz["is_synthetic"])
-    print(f"{name}: X {npz['X'].shape}  Y {npz['Y'].shape}")
+    # El notebook 03 guarda "el ULTIMO día de la ventana es sintético". Lo
+    # que hace falta es "ALGÚN día de la ventana lo es": una ventana que
+    # cruza la frontera arrastra hasta 59 días sintéticos en su entrada y
+    # se estaba contando como real (ver tu.ventana_contiene_sintetico).
+    is_synth = tu.ventana_contiene_sintetico(npz["is_synthetic"], config.WINDOW_X_DAYS)
+    datasets_by_generator[name] = (npz["X"], npz["Y"], idx, is_synth)
+    print(f"{name}: X {npz['X'].shape}  Y {npz['Y'].shape}  "
+          f"sintéticas {npz['is_synthetic'].mean():.4f} -> {is_synth.mean():.4f}")
 
 N_CHANNELS = datasets_by_generator[next(iter(datasets_by_generator))][0].shape[-1]  # 2 * N_PREDICTOR_TICKERS
 assert N_CHANNELS == 2 * config.N_PREDICTOR_TICKERS
@@ -208,34 +214,13 @@ architectures = {
     ),
 }
 
-# Checkpoint, por el mismo motivo que en las rejillas: `scripts/
-# rejilla_paralela.py` LEE de esta tabla que arquitectura entrenar, asi que
-# si el notebook la recalculase despues de la rejilla podria elegir otra red
-# y quedar incoherente con lo ya entrenado. Con checkpoint, la comparacion
-# se hace UNA vez y todo lo demas se cuelga de ella.
-# Para rehacerla desde cero: borrar los dos ficheros.
-_ARCH_CSV = config.TABLES_DIR / "04_comparacion_arquitecturas.csv"
-_ARCH_HIST = config.INTERIM_DIR / "04_checkpoint_arquitecturas_histories.json"
-
-if _ARCH_CSV.exists() and _ARCH_HIST.exists():
-    import json
-    arch_results = pd.read_csv(_ARCH_CSV, index_col=0)
-    arch_histories = json.loads(_ARCH_HIST.read_text(encoding="utf-8"))
-    print(f"comparacion de arquitecturas: reutilizando checkpoint "
-          f"({len(arch_results)} modelos)")
-else:
-    arch_results, arch_histories = tu.run_architecture_comparison(
-        architectures, X_train_arch, Y_train_arch, X_val, Y_val,
-        epochs=EPOCHS_ARQUITECTURA, batch_size=BATCH_SIZE, verbose=0,
-        early_stopping_patience=EARLY_STOPPING_PATIENCE,
-    )
-    arch_results.to_csv(_ARCH_CSV)
-    import json
-    _ARCH_HIST.write_text(json.dumps(
-        {k: {m: [float(x) for x in v] for m, v in h.items()}
-         for k, h in arch_histories.items()}, indent=2), encoding="utf-8")
-
-arch_results.sort_values("mae")
+arch_results, arch_histories = tu.run_architecture_comparison(
+    architectures, X_train_arch, Y_train_arch, X_val, Y_val, X_test, Y_test,
+    epochs=EPOCHS_ARQUITECTURA, batch_size=BATCH_SIZE, verbose=0,
+    early_stopping_patience=EARLY_STOPPING_PATIENCE,
+)
+arch_results.to_csv(config.TABLES_DIR / "04_comparacion_arquitecturas.csv")
+arch_results.sort_values("val_mae")
 
 # %%
 fig = pl.plot_loss_grid(arch_histories, ncols=3)
@@ -243,84 +228,42 @@ pl.savefig(fig, "04_loss_curvas_arquitecturas")
 fig
 
 # %% [markdown]
-# Se elige la arquitectura con menor MAE en **validación**. Las columnas
-# `mae`, `mse` y `directional_accuracy` de `arch_results` son de validacion
-# (`split=validation`); el test se reserva para la comparacion de generadores
+# Se elige la arquitectura con menor MAE en **validación** (`val_mae`), no
+# en test: el test se reserva íntegro para la comparación de generadores
 # del siguiente paso.
 #
-# Se distinguen dos cosas que antes se confundían en una sola variable:
-# `ARQUITECTURA_GANADORA` (quién gana, incluidas las referencias que no
-# aprenden) y `ARQUITECTURA_RED` (la mejor red, que es la que puede entrenar
-# la rejilla). Si el `constante` gana, la rejilla sigue adelante con la mejor
-# red —hace falta para comparar generadores— pero el aviso queda impreso.
+# La distinción no es cosmética. Elegir entre 7 candidatas por su error de
+# test es seleccionar sobre el conjunto de evaluación: se acabaría cogiendo
+# la que mejor encaja con el ruido concreto de ese test, y sus métricas
+# quedarían sesgadas a la baja. Y como la ganadora se propaga a las dos
+# rejillas siguientes, el sesgo contaminaría todos los resultados del
+# trabajo, no solo esta tabla. Se imprimen ambas columnas para que se vea
+# que la elección no cambia por mirar el test.
 
 # %%
-REFERENCIAS_SIN_APRENDIZAJE = ["constante", "baseline", "linear"]
-
-# `ARQUITECTURA_GANADORA` es quien gana de verdad, incluidas las referencias
-# que no aprenden nada; `ARQUITECTURA_RED` es la mejor RED, que es la que
-# puede entrenar la rejilla. Normalmente coinciden. Si no coinciden, ese
-# desacuerdo ES el resultado y hay que decirlo, no taparlo.
-ARQUITECTURA_GANADORA = arch_results["mae"].idxmin()
-
-# REGLA DE UN ERROR ESTANDAR, la misma que scripts/analizar_hpsearch.py usa
-# para elegir hiperparametros de los generadores: entre las candidatas que
-# empatan dentro de un error estandar de la mejor, quedarse con la MAS
-# SIMPLE (aqui: menos parametros).
-#
-# POR QUE: quedarse con el minimo a secas es quedarse con ruido. Las tres
-# mejores redes estan separadas por 0.000003 en MAE de validacion — el 0.4%
-# de un error estandar — y el orden entre ellas cambia de una ejecucion a
-# otra. En una ejecucion gano rnn_1capa (38.465 parametros) y en la
-# siguiente rnn_2capas (143.681, 4x mas lenta por epoca), sin que nada
-# relevante cambiara. Elegir la mas simple entre las empatadas hace la
-# decision estable Y barata, y es la practica estandar (Hastie et al.,
-# "one-standard-error rule").
-_redes = arch_results.drop(index=REFERENCIAS_SIN_APRENDIZAJE, errors="ignore")
-_params = pd.Series(
-    {n: architectures[n]().count_params() for n in _redes.index}, name="params"
-)
-_se = _redes["mae"].std() / max(len(_redes) ** 0.5, 1)
-_umbral = _redes["mae"].min() + _se
-_empatadas = _redes[_redes["mae"] <= _umbral]
-ARQUITECTURA_RED = _params.loc[_empatadas.index].idxmin()
-
-print(f"\nRegla de 1 e.e.: umbral MAE <= {_umbral:.6f} (mejor {_redes['mae'].min():.6f} "
-      f"+ e.e. {_se:.6f})")
-print(f"  empatadas: {list(_empatadas.index)}")
-print(f"  elegida por simplicidad: {ARQUITECTURA_RED} "
-      f"({_params[ARQUITECTURA_RED]:,} parametros)")
-if _redes["mae"].idxmin() != ARQUITECTURA_RED:
-    print(f"  (el minimo a secas habria sido {_redes['mae'].idxmin()}, "
-          f"{_params[_redes['mae'].idxmin()]:,} parametros, por "
-          f"{_redes['mae'].min() - _redes.loc[ARQUITECTURA_RED, 'mae']:+.6f} de MAE)")
-mae_constante = arch_results.loc["constante", "mae"] if "constante" in arch_results.index else None
-mejor_direccional = arch_results["directional_accuracy"].idxmax()
-print("Arquitectura elegida (menor MAE):", ARQUITECTURA_GANADORA)
-
-if mae_constante is not None:
-    peores = arch_results[arch_results["mae"] >= mae_constante].index.difference(
-        REFERENCIAS_SIN_APRENDIZAJE
-    )
-    print(f"\nMAE del predictor CONSTANTE (no mira X): {mae_constante:.6f}")
-    print(f"Redes que NO lo superan: {list(peores) if len(peores) else 'ninguna'}")
-    if ARQUITECTURA_GANADORA == "constante":
-        print(
-            "\n[RESULTADO] Ninguna red bate a predecir la media. La rejilla se\n"
-            f"entrena igualmente con la mejor red ({ARQUITECTURA_RED}) para poder\n"
-            "comparar generadores, pero la lectura honesta es que el predictor no\n"
-            "extrae senal de la ventana X."
-        )
-    else:
-        margen = mae_constante - arch_results.loc[ARQUITECTURA_RED, "mae"]
-        print(f"Margen de la mejor red sobre la constante: {margen:+.6f} "
-              f"({margen / mae_constante * 100:+.2f}%)")
+ARQUITECTURA_GANADORA = tu.elegir_por_una_ee(arch_results)
+mejor_direccional = arch_results["val_directional_accuracy"].idxmax()
+print("Ranking por validación (criterio de selección):")
+print(arch_results[["val_mae", "val_mae_se", "n_params", "mae"]]
+      .sort_values("val_mae").round(6))
+print()
+_min = arch_results["val_mae"].idxmin()
+_umbral = arch_results.loc[_min, "val_mae"] + arch_results.loc[_min, "val_mae_se"]
+print(f"Mínimo val_mae: '{_min}' ({arch_results.loc[_min,'val_mae']:.6f}), "
+      f"umbral 1 e.e. = {_umbral:.6f}")
+print(f"Dentro de 1 e.e.: {list(arch_results[arch_results.val_mae <= _umbral].index)}")
+print(f"-> se elige la MÁS SIMPLE de ellas: {ARQUITECTURA_GANADORA}")
+print()
+if arch_results["mae"].idxmin() != ARQUITECTURA_GANADORA:
+    print(f"[NOTA] Por test habría ganado '{arch_results['mae'].idxmin()}'. "
+          f"Se mantiene la elección por validación, que es la correcta.")
+print("Arquitectura elegida (menor val_mae):", ARQUITECTURA_GANADORA)
 if mejor_direccional != ARQUITECTURA_GANADORA:
     print(
-        f"[AVISO] '{mejor_direccional}' tiene mejor precisión direccional "
-        f"({arch_results.loc[mejor_direccional, 'directional_accuracy']:.3f} vs "
-        f"{arch_results.loc[ARQUITECTURA_GANADORA, 'directional_accuracy']:.3f}) aunque peor MAE — "
-        "vale la pena citar ambas arquitecturas en la presentación."
+        f"[AVISO] '{mejor_direccional}' tiene mejor precisión direccional en "
+        f"validación ({arch_results.loc[mejor_direccional, 'val_directional_accuracy']:.3f} vs "
+        f"{arch_results.loc[ARQUITECTURA_GANADORA, 'val_directional_accuracy']:.3f}) aunque peor "
+        "MAE — vale la pena citar ambas arquitecturas en la presentación."
     )
 
 

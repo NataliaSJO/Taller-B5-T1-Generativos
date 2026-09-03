@@ -286,17 +286,37 @@ def main():
     print(f"     HAR coef: c={coef[0]:+.3f} d={coef[1]:+.3f} "
           f"s={coef[2]:+.3f} m={coef[3]:+.3f}", flush=True)
 
-    # ---- la red: rejilla % sinteticos x generador ----------------------
+    # ---- la red: rejilla % sinteticos x generador x ARQUITECTURA -------
     # canal extra con el log-GK REAL, para que el modelo vea lo mismo que
     # sus baselines (ver punto 1 del rigor informatico).
-    def entrenar(X_tr, Yt, X_val, Yv, X_te, n_canales):
+    #
+    # ABLACION DE ARQUITECTURA. La busqueda de hiperparametros del proyecto
+    # selecciono `global_pool=True`, que sustituye el Flatten final por un
+    # GlobalAveragePooling1D. Ese pooling PROMEDIA SOBRE EL EJE TEMPORAL, o
+    # sea que la representacion queda invariante a permutaciones del tiempo:
+    # la red no puede distinguir si un valor viene de ayer o de hace 60
+    # dias. Para predecir la volatilidad de manana — cuyo predictor
+    # dominante es la de AYER — eso es incapacitante, y explica que la red
+    # se quede al nivel del baseline constante (corr ~0.06) mientras HAR
+    # llega a 0.465 con tres coeficientes.
+    #
+    # Que la busqueda lo eligiera es coherente: optimizaba sobre el target
+    # de RETORNOS, donde no hay senal, y ahi una arquitectura incapaz de
+    # aprender no pierde nada frente a las demas. Se corren las dos para
+    # que la afirmacion quede demostrada y no solo enunciada.
+    ARQUITECTURAS = {
+        "pool": True,      # la que eligio la busqueda: sin orden temporal
+        "flatten": False,  # preserva la posicion en el tiempo
+    }
+
+    def entrenar(X_tr, Yt, X_val, Yv, X_te, n_canales, global_pool):
         preds = []
         for s in semillas:
             keras.utils.set_random_seed(int(s))
             m = modelos.build_predictor_cnn(
                 config.WINDOW_X_DAYS, n_canales, config.N_PREDICTOR_TICKERS,
-                conv_filters=(32, 64), global_pool=True, loss="mse",
-                learning_rate=1e-3, dropout=0.1,
+                conv_filters=(32, 64), global_pool=global_pool, loss="mse",
+                learning_rate=1e-3, dropout=0.1, dense_units=64,
             )
             m.fit(X_tr, Yt, epochs=args.epochs, batch_size=64,
                   validation_data=(X_val, Yv), verbose=0,
@@ -321,26 +341,30 @@ def main():
             gk_win[i] = lv[j - config.WINDOW_X_DAYS + 1 : j + 1]
         X = np.concatenate([Xg, gk_win], axis=-1)
 
-        for pct in config.PCT_SYNTH_GRID:
-            nombre = "1_solo_reales" if pct <= 0 else gen
-            if pct <= 0 and any(f["modelo"] == "1_solo_reales" for f in filas):
-                continue
-            X_tr, Y_tr, _, pct_real = tu.slice_by_pct(
-                X, Y_v, idx_v, pct, config.VAL_START_DATE, is_syn
-            )
-            # estandarizacion con estadisticos SOLO del train de esta config
-            mu = X_tr.reshape(-1, X.shape[-1]).mean(axis=0)
-            sd = X_tr.reshape(-1, X.shape[-1]).std(axis=0) + 1e-8
-            muy, sdy = Y_tr.mean(axis=0), Y_tr.std(axis=0) + 1e-8
-            z = lambda A: ((A - mu) / sd).astype("float32")
+        for arq, gpool in ARQUITECTURAS.items():
+            for pct in config.PCT_SYNTH_GRID:
+                nombre = "1_solo_reales" if pct <= 0 else gen
+                etiqueta = f"{arq}_{nombre}_{int(pct*100):03d}"
+                if pct <= 0 and any(f["modelo"] == etiqueta for f in filas):
+                    continue
+                X_tr, Y_tr, _, pct_real = tu.slice_by_pct(
+                    X, Y_v, idx_v, pct, config.VAL_START_DATE, is_syn
+                )
+                # estandarizacion con estadisticos SOLO del train de esta config
+                mu = X_tr.reshape(-1, X.shape[-1]).mean(axis=0)
+                sd = X_tr.reshape(-1, X.shape[-1]).std(axis=0) + 1e-8
+                muy, sdy = Y_tr.mean(axis=0), Y_tr.std(axis=0) + 1e-8
+                z = lambda A: ((A - mu) / sd).astype("float32")
 
-            preds = entrenar(z(X_tr), (Y_tr - muy) / sdy, z(X[val]),
-                             (Y_v[val] - muy) / sdy, z(X[test]), X.shape[-1])
-            preds = [p * sdy + muy for p in preds]
-            por_semilla = [metricas(Y_v[test], p)["qlike"] for p in preds]
-            registrar(f"{nombre}_{int(pct*100):03d}", np.mean(preds, axis=0),
-                      {"generador": nombre, "pct_objetivo": pct, "n_train": len(X_tr),
-                       "pct_synth": pct_real, "qlike_std_semillas": float(np.std(por_semilla))})
+                preds = entrenar(z(X_tr), (Y_tr - muy) / sdy, z(X[val]),
+                                 (Y_v[val] - muy) / sdy, z(X[test]), X.shape[-1], gpool)
+                preds = [p * sdy + muy for p in preds]
+                por_semilla = [metricas(Y_v[test], p)["qlike"] for p in preds]
+                registrar(etiqueta, np.mean(preds, axis=0),
+                          {"arquitectura": arq, "generador": nombre,
+                           "pct_objetivo": pct, "n_train": len(X_tr),
+                           "pct_synth": pct_real,
+                           "qlike_std_semillas": float(np.std(por_semilla))})
 
     # ---- significancia: todo contra HAR --------------------------------
     df = pd.DataFrame(filas)

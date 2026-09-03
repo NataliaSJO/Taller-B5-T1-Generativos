@@ -105,6 +105,67 @@ pl.savefig(fig, "05_resultado_final_mae")
 fig
 
 # %% [markdown]
+# ## 3b. El eje del enunciado: PORCENTAJE de datos sintéticos
+#
+# El paso 5 pide ver "cómo meter más o menos datos sintéticos modifica el
+# comportamiento del modelo". La rejilla por años de arriba es la rejilla
+# natural del problema financiero, pero traducida a porcentaje se amontona
+# entre el 87% y el 96%: no permite ver la forma de la curva. La rejilla
+# por porcentaje (notebook 04, `PCT_SYNTH_GRID`) barre el eje completo
+# manteniendo todas las filas reales y añadiendo sintéticas hasta la
+# proporción pedida.
+#
+# Se promedia entre los 4 generadores en cada nivel: cada celda individual
+# está dominada por el ruido de inicialización (ver §7), así que la media
+# de los 4 es más informativa que cualquiera de ellos por separado.
+
+# %%
+res_pct = pd.read_csv(config.TABLES_DIR / "04_resultados_rejilla_porcentaje.csv", index_col=0)
+base_dir = float(res_pct[res_pct.generator == "solo_reales"].directional_accuracy.iloc[0])
+con_synth = res_pct[res_pct.generator != "solo_reales"]
+
+resumen_pct = con_synth.groupby("pct_objetivo").directional_accuracy.agg(["mean", "std", "count"])
+resumen_pct["ee"] = resumen_pct["std"] / np.sqrt(resumen_pct["count"])
+resumen_pct["vs_base_pp"] = (resumen_pct["mean"] - base_dir) * 100
+resumen_pct.to_csv(config.TABLES_DIR / "05_tabla_porcentaje_sintetico.csv")
+print(f"referencia solo reales (0% sintético): {base_dir:.1%}")
+resumen_pct.round(4)
+
+# %%
+fig, ax = plt.subplots(figsize=(8, 4.5))
+x = resumen_pct.index * 100
+ax.errorbar(x, resumen_pct["mean"] * 100, yerr=resumen_pct["ee"] * 100,
+            marker="o", linewidth=2, capsize=4, color=pl.PALETTE.get("real", "C0"),
+            label="media de los 4 generadores")
+ax.axhline(base_dir * 100, color="0.35", linestyle="--", linewidth=1.4,
+           label="solo reales (0% sintético)")
+ax.axhline(50, color="0.75", linestyle=":", linewidth=1.2, label="azar (50%)")
+ax.set_xlabel("% de ventanas sintéticas en el entrenamiento")
+ax.set_ylabel("acierto direccional (test real)")
+ax.set_title("Efecto del porcentaje de datos sintéticos (media de los 4 generadores)")
+ax.legend(frameon=False)
+pl.style_axes(ax)
+fig.tight_layout()
+pl.savefig(fig, "05_acierto_vs_porcentaje")
+fig
+
+# %%
+# Tendencia y contraste de rangos sobre los 20 puntos con sintéticos.
+from scipy.stats import spearmanr
+
+pend = np.polyfit(con_synth.pct_objetivo, con_synth.directional_accuracy, 1)[0] * 100
+rho, pval = spearmanr(con_synth.pct_objetivo, con_synth.directional_accuracy)
+print(f"pendiente: {pend:+.2f} puntos de acierto por cada 100% de sintético")
+print(f"Spearman pct vs acierto: rho={rho:+.3f} (p={pval:.3f})")
+print()
+print("Lectura honesta: hay tendencia creciente con pico en el 90% y caída al")
+print("100% (sin ningún dato real como ancla), y el mismo patrón aparece en el")
+print("experimento independiente de v2 con target de volatilidad. Pero el punto")
+print("del 50% rompe la monotonía y el error estándar de cada nivel está")
+print("calculado sobre 4 generadores de UNA corrida, que no son 4 réplicas")
+print("independientes. Es una tendencia corroborada, no un efecto probado.")
+
+# %% [markdown]
 # ## 4. Mejor generador a máxima profundidad sintética vs. calidad de
 #    reconstrucción de la distribución conjunta (notebook 02)
 #
@@ -164,7 +225,63 @@ mae_por_banco.round(5)
 empalme.round(3)
 
 # %% [markdown]
-# ## 7. Resumen para el README / presentación
+# ## 7. El suelo de ruido: ¿cuánto de lo anterior es señal?
+#
+# Antes de declarar ganadores hay que saber cuánto se mueve una cifra sin
+# que cambie nada.
+#
+# La evidencia decisiva es **repetir la rejilla entera**. Se hizo: mismo
+# código, mismos datos, misma arquitectura, dos ejecuciones distintas. La
+# correlación de rangos del acierto direccional entre ambas fue **−0.10**
+# —esencialmente cero— con cambios de hasta **6.36 puntos** en la misma
+# configuración. Es decir, el orden de los generadores que produce una
+# ejecución no se parece al que produce la siguiente.
+#
+# Hay una segunda señal, en la propia tabla de arquitecturas del notebook
+# 04: el error estándar del `val_mae` (~0.00075) es **el doble del rango
+# completo** entre las cinco redes comparadas (0.011485 a 0.011813). Las
+# cinco caen dentro de 1 e.e. de la mejor. Con 126 días de validación no es
+# que elijamos bien la arquitectura: es que **no se puede elegir**, y por
+# eso se aplica la regla de 1 e.e. (`tu.elegir_por_una_ee`) en vez de
+# quedarse con el mínimo.
+#
+# Conclusión operativa: cualquier lectura del tipo "el generador X es el
+# mejor" en este trabajo sería un artefacto. Por eso §3b promedia entre los
+# 4 generadores en vez de proclamar un ganador.
+
+# %%
+dir_depth = float(results[results.generator == "solo_reales"].directional_accuracy.iloc[0])
+dir_pct = float(res_pct[res_pct.generator == "solo_reales"].directional_accuracy.iloc[0])
+mae_depth = float(results[results.generator == "solo_reales"].mae.iloc[0])
+mae_pct = float(res_pct[res_pct.generator == "solo_reales"].mae.iloc[0])
+
+n_depth = int(results[results.generator == "solo_reales"].n_train.iloc[0])
+n_pct = int(res_pct[res_pct.generator == "solo_reales"].n_train.iloc[0])
+pct_depth = float(results[results.generator == "solo_reales"].pct_synth.iloc[0])
+print("(a) Las dos referencias 'solo_reales' NO son la misma configuración:")
+print(f"    rejilla por años      : n={n_depth}, {pct_depth:.1%} de ventanas con "
+      f"algún día sintético -> acierto {dir_depth:.2%}")
+print(f"    rejilla por porcentaje: n={n_pct}, cero limpio (solo ventanas "
+      f"totalmente reales) -> acierto {dir_pct:.2%}")
+print("    Comparar ambas mediría dos datasets distintos, no el ruido de")
+print("    inicialización. La referencia honesta de 'sin sintéticos' es la")
+print(f"    segunda: {dir_pct:.2%}, prácticamente una moneda al aire.")
+print()
+
+rango_gen = (results.groupby("synth_years").directional_accuracy.max()
+             - results.groupby("synth_years").directional_accuracy.min()) * 100
+rango_gen = rango_gen[rango_gen > 0]
+print("(b) Rango entre generadores dentro de cada profundidad (puntos de acierto):")
+print(rango_gen.round(2).to_string())
+print()
+print(f"El rango entre generadores va de {rango_gen.min():.1f} a {rango_gen.max():.1f}")
+print("puntos. Repitiendo la rejilla ENTERA, la misma configuración se movió")
+print("hasta 6.36 puntos y la correlación de rangos entre ambas corridas fue")
+print("-0.10: ese rango es ruido de inicialización, no diferencia entre")
+print("generadores. El ranking entre generadores no es señal.")
+
+# %% [markdown]
+# ## 8. Resumen para el README / presentación
 #
 # Esta celda imprime, en texto, el resumen que debe copiarse (o citarse) en
 # el README y en las diapositivas de resultados.
