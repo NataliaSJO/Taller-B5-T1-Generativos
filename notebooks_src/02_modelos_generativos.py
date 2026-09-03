@@ -225,3 +225,64 @@ corr_quality
 for name, synth in synthetic_pools.items():
     np.save(config.INTERIM_DIR / f"synthetic_pool_{name}.npy", synth)
 print("Guardados:", list(synthetic_pools.keys()))
+
+# %% [markdown]
+# ## 9. Anexo · hiperparametros ganadores de la busqueda
+#
+# Todo lo anterior usa los hiperparametros **de partida**, los del material
+# de clase. La busqueda de `scripts/hp_search_generators.py` encontro
+# configuraciones mejores, y `scripts/analizar_hpsearch.py` elige una por
+# familia con la regla de un error estandar:
+#
+# | Generador | Configuracion elegida |
+# |---|---|
+# | Ruido | `sigma=0.0185`, relativo, ruido **t-Student** (4 g.l.) |
+# | Gaussiana | sin shrinkage, marginal **`rank_gauss`** (copula) |
+# | RBIG | **`n_iters=100`, `grid_size=800`, rotacion PCA** |
+# | GAN | `latent=48`, 2000 epochs, `batch=128`, `lr=3e-4`, **`d_steps_per_g=5`** |
+#
+# Este anexo repite los tres diagnosticos de arriba con esas
+# configuraciones, sobre **el mismo pool, la misma exclusion de val+test y
+# la misma particion** que el cuerpo del notebook, para que la comparacion
+# solo mida el efecto de los hiperparametros:
+#
+# ```bash
+# python scripts/figuras_generadores_hpbest.py --datos <ruta>/datos
+# ```
+#
+# | Generador | MMD clase → óptima | W1 clase → óptima | Frobenius clase → óptima |
+# |---|---|---|---|
+# | Ruido | 0.000000 → 0.000000 | 0.0226 → 0.0190 | 0.127 → 0.115 |
+# | Gaussiana | 0.038105 → 0.004253 | 0.2120 → 0.0197 | 0.097 → 0.292 |
+# | RBIG | 0.000009 → 0.000549 | 0.0372 → 0.0230 | 0.196 → 0.117 |
+# | GAN | 0.524680 → 0.009631 | 0.9431 → 0.1400 | 1.886 → 0.354 |
+#
+# Lectura: la **Gaussiana** es el cambio grande — `rank_gauss` conserva las
+# marginales reales (colas pesadas incluidas) y modela solo la dependencia,
+# que es lo unico que una Normal si puede capturar; a cambio empeora la
+# matriz de correlacion. El **GAN** deja de colapsar al subir
+# `d_steps_per_g`. Ruido y RBIG se mueven poco.
+#
+# ![Real vs sintetico con hiperparametros optimizados](../reports/figures/02_real_vs_sintetico_por_generador_hpbest.png)
+#
+# ![Efecto de la busqueda sobre las tres metricas](../reports/figures/02_fidelidad_clase_vs_hpbest.png)
+#
+# ![Convergencia de RBIG, clase vs optimizada](../reports/figures/02_rbig_convergencia_hpbest.png)
+#
+# ![Convergencia del GAN, clase vs optimizada](../reports/figures/02_gan_convergencia_hpbest.png)
+#
+# **Cuidado con leer la columna de Frobenius como un ranking.** Repitiendo
+# la MISMA configuracion sobre el MISMO pool y cambiando solo que 10% de
+# filas cae en el holdout (12 particiones), la distancia de Frobenius del
+# Ruido se mueve entre **0.112 y 0.388** (media 0.223, desv. 0.065) y la de
+# la Gaussiana entre **0.105 y 0.339** (media 0.200, desv. 0.062). Las
+# diferencias entre Ruido, Gaussiana y RBIG caben dentro de esa dispersion:
+# lo unico que queda fuera de ella es el colapso del GAN sin optimizar. La
+# causa de fondo es que la particion es **por fila** y en un mismo dia hay
+# decenas de bancos correlacionados, asi que el holdout no es independiente
+# del entrenamiento; lo correcto seria partir **por dia**.
+#
+# Nada de esto cambia los notebooks 03-05: el pipeline final sigue usando
+# los pools de la configuracion de partida, porque la seleccion del
+# generador se hace por rendimiento aguas abajo y ahi las cuatro familias
+# empatan (ver README, seccion 6.3).

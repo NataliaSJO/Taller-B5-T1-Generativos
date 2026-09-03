@@ -167,3 +167,43 @@ for name, (X, Y, idx, is_synthetic) in datasets_by_generator.items():
         X=X, Y=Y, idx=idx.values.astype("datetime64[ns]"), is_synthetic=is_synthetic,
     )
 print("Guardados:", [f"dataset_{n}.npz" for n in datasets_by_generator])
+
+# %% [markdown]
+# ## 8. Anexo · hiperparametros ganadores de la busqueda
+#
+# El mismo backfill condicional —mismos `k=80` vecinos, mismo kernel, misma
+# semilla— alimentado con los pools de los generadores optimizados del
+# anexo del notebook 02:
+#
+# ```bash
+# python scripts/figuras_backfill_hpbest.py --datos <ruta>/datos
+# ```
+#
+# ![Backfill de JPM con generadores optimizados](../reports/figures/03_backfill_serie_temporal_JPM_hpbest.png)
+#
+# | Generador | ratio de empalme | desv. entre bancos | autocorr. sintética | autocorr. real |
+# |---|---|---|---|---|
+# | Ruido | 1.196 | 0.106 | 0.081 | 0.588 |
+# | Gaussiana | 1.145 | 0.117 | -0.004 | 0.588 |
+# | RBIG | 1.186 | 0.101 | 0.082 | 0.588 |
+# | GAN | 1.025 | 0.083 | 0.117 | 0.588 |
+#
+# Tres lecturas:
+#
+# 1. **La Gaussiana deja de ser una banda plana.** Con la configuracion de
+#    clase su volatilidad sintetica no tenia colas, asi que los ~24 anios
+#    salian sin crisis; con `rank_gauss` conserva las marginales reales y
+#    vuelven a aparecer picos. RBIG ensena ademas un racimo claro en
+#    2008-09.
+# 2. **El empalme no mejora.** El nivel sintetico sigue un 15-20% por
+#    encima del real inmediatamente posterior. Ese sesgo no lo arregla el
+#    generador porque no viene solo de el: la ventana de medida sintetica
+#    (nov-2018 → oct-2020) incluye el COVID y la real de despues es la
+#    recuperacion, y ademas el pool son 150 bancos —muchos pequenos y
+#    volatiles— frente a los 25 grandes supervivientes del predictor.
+# 3. **La persistencia sigue rota.** La autocorrelacion a un dia del tramo
+#    sintetico se queda muy por debajo de la del tramo real, con cualquier
+#    generador. Es la consecuencia directa de muestrear cada dia de forma
+#    independiente: no es un defecto del generador, sino del mecanismo de
+#    condicionamiento (ver `v2_persistencia_temporal/`, que lo corrige
+#    condicionando tambien a la volatilidad del dia anterior).
